@@ -1,0 +1,17 @@
+{
+  "name": "Escapade - Planificateur de vacances",
+  "short_name": "Escapade",
+  "description": "Planifiez vos itinéraires, activités, réservations, budgets et bagages.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4f2ec",
+  "theme_color": "#153d3a",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

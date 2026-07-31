@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#153d3a">
+  <meta name="description" content="Planificateur de vacances familial, local et compatible GitHub Pages.">
+  <title>Escapade - Planificateur de vacances</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="preconnect" href="https://unpkg.com">
+  <link rel="preconnect" href="https://tile.openstreetmap.org">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <a class="brand" href="#overview" aria-label="Accueil Escapade">
+        <span class="brand-mark">E</span>
+        <span><strong>Escapade</strong><small>Planificateur familial</small></span>
+      </a>
+      <div class="trip-switcher">
+        <label class="sr-only" for="trip-select">Voyage actif</label>
+        <select id="trip-select"></select>
+        <button class="btn btn-primary" id="new-trip-btn" type="button">+ Nouveau voyage</button>
+      </div>
+      <div class="top-actions">
+        <button class="icon-btn" id="print-btn" type="button" title="Imprimer">⎙</button>
+        <button class="icon-btn" id="export-btn" type="button" title="Exporter">⇩</button>
+        <button class="icon-btn" id="import-btn" type="button" title="Importer">⇧</button>
+        <input id="import-file" type="file" accept="application/json" hidden>
+        <button class="icon-btn" id="theme-btn" type="button" title="Changer le thème">◐</button>
+      </div>
+    </header>
+
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Navigation principale">
+        <nav id="main-nav">
+          <a href="#overview" data-page="overview"><span>⌂</span> Vue d'ensemble</a>
+          <a href="#itinerary" data-page="itinerary"><span>☷</span> Jour par jour</a>
+          <a href="#map" data-page="map"><span>⌖</span> Carte</a>
+          <a href="#budget" data-page="budget"><span>€</span> Budget</a>
+          <a href="#reservations" data-page="reservations"><span>⌁</span> Réservations</a>
+          <a href="#checklist" data-page="checklist"><span>✓</span> Checklist</a>
+          <a href="#resources" data-page="resources"><span>☆</span> Inspirations</a>
+          <a href="#settings" data-page="settings"><span>⚙</span> Préférences</a>
+        </nav>
+        <div class="sidebar-footer">
+          <span class="status-dot"></span>
+          <div><strong>Sauvegarde locale</strong><small>Vos données restent dans ce navigateur</small></div>
+        </div>
+      </aside>
+
+      <main id="main-content" tabindex="-1"></main>
+    </div>
+
+    <nav class="mobile-nav" aria-label="Navigation mobile">
+      <a href="#overview" data-page="overview">⌂<small>Accueil</small></a>
+      <a href="#itinerary" data-page="itinerary">☷<small>Planning</small></a>
+      <a href="#map" data-page="map">⌖<small>Carte</small></a>
+      <a href="#budget" data-page="budget">€<small>Budget</small></a>
+      <a href="#settings" data-page="settings">⚙<small>Plus</small></a>
+    </nav>
+  </div>
+
+  <div class="modal-backdrop hidden" id="modal-backdrop" aria-hidden="true">
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <header><div><p class="eyebrow" id="modal-eyebrow"></p><h2 id="modal-title"></h2></div><button class="icon-btn" id="modal-close" type="button" aria-label="Fermer">×</button></header>
+      <form id="modal-form"><div id="modal-body"></div><footer><button class="btn btn-ghost" id="modal-cancel" type="button">Annuler</button><button class="btn btn-primary" id="modal-submit" type="submit">Enregistrer</button></footer></form>
+    </section>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
