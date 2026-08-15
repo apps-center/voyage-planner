@@ -36,6 +36,28 @@ const TRANSPORT_MODES = [
   ['voiture_loc', '🚙', 'Voiture location'], ['velo', '🚴', 'Vélo'], ['bateau', '⛴️', 'Bateau']
 ];
 const BUDGET_BANDS = [[200, 500], [500, 1000], [1000, 3000], [2000, 6000], [5000, 10000], [10000, 20000]];
+// Activity type -> checklist items [label, group]. Drives auto-checklist from chosen proposals/activities.
+const ACTIVITY_CHECKLIST = {
+  golf: [['Réserver le green-fee', 'À réserver'], ['Sac de golf / clubs', 'Bagages'], ['Chaussures de golf', 'Bagages']],
+  tennis: [['Réserver un court', 'À réserver'], ['Raquettes de tennis', 'Bagages']],
+  rando: [['Chaussures de randonnée', 'Bagages'], ['Sac à dos et gourde', 'Bagages']],
+  baignade: [['Maillots de bain', 'Bagages'], ['Chaussures d’eau', 'Bagages'], ['Serviettes', 'Bagages']],
+  nautique: [['Maillots de bain', 'Bagages'], ['Coupe-vent', 'Bagages']],
+  ebike: [['Réserver les vélos', 'À réserver'], ['Casque vélo', 'Bagages']],
+  velo: [['Réserver les vélos', 'À réserver'], ['Casque vélo', 'Bagages']],
+  musee: [['Réserver les billets (musées)', 'À réserver']],
+  culture: [['Réserver les billets', 'À réserver']],
+  nature: [['Chaussures de marche', 'Bagages']],
+  gastronomie: [['Réserver les restaurants', 'À réserver']]
+};
+// Transport mode -> checklist items.
+const TRANSPORT_CHECKLIST = {
+  avion: [['Cartes d’embarquement', 'Documents'], ['Vérifier les bagages cabine', 'À faire']],
+  voiture_loc: [['Permis de conduire', 'Documents'], ['Confirmer la location de voiture', 'À réserver']],
+  voiture_perso: [['Papiers et assurance du véhicule', 'Documents']],
+  train: [['Billets de train', 'Documents']],
+  bateau: [['Réservation ferry / billets', 'Documents']]
+};
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -835,6 +857,7 @@ function handleAction(action,node) {
     case 'children-dec': readStep1Form(); trip.brief.children.pop(); trip.travelers=Math.max(1,trip.brief.adults+trip.brief.children.length); saveState(); renderPage(); break;
     case 'toggle-proposal': { const group=trip.proposals?.[node.dataset.stop]?.[node.dataset.group]; const item=group?.find(x=>x.id===node.dataset.id); if(item){item.selected=node.checked;saveState();} break; }
     case 'add-selected-to-resources': addSelectedProposals(); break;
+    case 'integrate-proposals': integrateProposals(); break;
     case 'clear-proposals': if(confirm('Retirer toutes les propositions importées ?')){trip.proposals={};saveState('Propositions retirées.');renderPage();}break;
     case 'create-next': applyCreateStep(currentStep); currentStep=Math.min(4,currentStep+1); renderPage(); break;
     case 'create-prev': applyCreateStep(currentStep); currentStep=Math.max(1,currentStep-1); renderPage(); break;
@@ -1287,7 +1310,7 @@ function renderProposals() {
   const stopIds = Object.keys(proposals);
   const selected = countSelectedProposals(trip);
   const groupsMeta = [['hotels', '🏨', 'Hébergements'], ['restaurants', '🍽️', 'Restaurants'], ['activities', '🎯', 'Activités']];
-  const actions = `<button class="btn btn-secondary" data-action="import-data">⇧ Importer des propositions</button>${stopIds.length ? `<button class="btn btn-secondary" data-action="clear-proposals">Vider</button><button class="btn btn-primary" data-action="add-selected-to-resources">+ Ajouter aux Inspirations${selected ? ` (${selected})` : ''}</button>` : ''}`;
+  const actions = `<button class="btn btn-secondary" data-action="import-data">⇧ Importer</button>${stopIds.length ? `<button class="btn btn-secondary" data-action="add-selected-to-resources">☆ Inspirations${selected ? ` (${selected})` : ''}</button><button class="btn btn-secondary" data-action="clear-proposals">Vider</button><button class="btn btn-primary" data-action="integrate-proposals">✓ Intégrer au voyage${selected ? ` (${selected})` : ''}</button>` : ''}`;
   const body = stopIds.length ? stopIds.map(stopId => {
     const stop = trip.stops.find(item => item.id === stopId);
     const label = stop ? stop.place : 'Étape non reconnue';
@@ -1299,7 +1322,7 @@ function renderProposals() {
     }).join('')}</section>`;
   }).join('') : `<article class="card empty-state"><span class="big">📥</span>Aucune proposition importée. Exportez le brief depuis l'assistant, donnez-le à Claude, puis importez ici le JSON <code>propositions_v1</code> qu'il renvoie.</article>`;
   $('#main-content').innerHTML = `<div class="page">
-    ${pageHeader('Sélection', 'Propositions de Claude', 'Cochez ce qui vous intéresse, puis ajoutez-le à vos inspirations.', actions)}
+    ${pageHeader('Sélection', 'Propositions de Claude', 'Cochez vos choix : « Intégrer au voyage » remplit le planning, les réservations et la checklist ; « Inspirations » garde-les en réserve.', actions)}
     ${body}
   </div>`;
 }
@@ -1321,6 +1344,90 @@ function addSelectedProposals() {
   if (!added) return toast('Cochez au moins une proposition.');
   saveState(`${added} proposition(s) ajoutée(s) aux Inspirations.`);
   navigate('resources');
+}
+
+function mapProposalCategory(type) {
+  const map = { golf: 'golf', tennis: 'tennis', rando: 'rando', baignade: 'plage', nautique: 'nature', nature: 'nature', musee: 'culture', culture: 'culture', ebike: 'vtt', velo: 'vtt', shopping: 'autre', poi: 'visite', gastronomie: 'repas' };
+  return map[String(type || '').toLowerCase()] || 'visite';
+}
+
+// Maps each trip date to the stop occupying it (by cumulative nights), so proposals land on the right days.
+function stopDateMap(trip) {
+  const dates = enumerateDates(trip.startDate, trip.endDate);
+  const sequence = [];
+  trip.stops.forEach(stop => { for (let i = 0; i < Math.max(1, stop.nights); i++) sequence.push(stop.id); });
+  const byStop = {};
+  dates.forEach((date, index) => {
+    const stopId = sequence[index] || sequence[sequence.length - 1];
+    if (stopId) (byStop[stopId] = byStop[stopId] || []).push(date);
+  });
+  return { dates, byStop };
+}
+
+function addChecklistFromSelection(trip, selection) {
+  const existing = new Set(trip.checklist.map(item => item.label.trim().toLowerCase()));
+  const queued = [];
+  const push = (label, group) => {
+    const key = label.trim().toLowerCase();
+    if (!existing.has(key)) { existing.add(key); queued.push({ label, group }); }
+  };
+  selection.filter(entry => entry.group === 'activities').forEach(({ item }) => {
+    (ACTIVITY_CHECKLIST[String(item.type || '').toLowerCase()] || []).forEach(([label, group]) => push(label, group));
+  });
+  if (selection.some(entry => entry.group === 'hotels')) push('Confirmer la réservation d’hébergement', 'À réserver');
+  (trip.brief.transport || []).forEach(mode => (TRANSPORT_CHECKLIST[mode] || []).forEach(([label, group]) => push(label, group)));
+  push('Documents d’identité (passeport / CNI)', 'Documents');
+  if ((trip.brief.children || []).length) push('Trousse à pharmacie enfants', 'Bagages');
+  queued.forEach(entry => trip.checklist.push({ id: uid('chk'), label: entry.label, group: entry.group, assignee: 'Famille', done: false }));
+  return queued.length;
+}
+
+function integrateProposals() {
+  const trip = activeTrip();
+  const selection = [];
+  Object.entries(trip.proposals || {}).forEach(([stopId, groups]) => {
+    ['hotels', 'restaurants', 'activities'].forEach(group => (groups[group] || []).forEach(item => { if (item.selected) selection.push({ stopId, group, item }); }));
+  });
+  if (!selection.length) return toast('Cochez au moins une proposition.');
+  if (!enumerateDates(trip.startDate, trip.endDate).length) return toast('Définissez d’abord les dates du voyage (assistant, étape 1).');
+
+  const { byStop } = stopDateMap(trip);
+  const byDate = new Map(trip.days.map(day => [day.date, day]));
+  const dayFor = date => {
+    let day = byDate.get(date);
+    if (!day) { day = { id: uid('day'), date, title: '', location: '', activities: [] }; trip.days.push(day); byDate.set(date, day); }
+    return day;
+  };
+  const times = ['09:30', '14:00', '16:30', '11:00'];
+  const cursor = {};
+  let activities = 0, reservations = 0;
+
+  selection.forEach(({ stopId, group, item }) => {
+    const stop = trip.stops.find(entry => entry.id === stopId);
+    const dates = byStop[stopId] || [];
+    if (group === 'hotels') {
+      trip.reservations.push({ id: uid('res'), type: 'Hébergement', name: item.title, provider: item.area || '', start: dates[0] || trip.startDate, end: dates[dates.length - 1] || trip.endDate, confirmation: '', cost: item.price, url: item.url, notes: item.note });
+      reservations++;
+      return;
+    }
+    const key = stopId + group;
+    cursor[key] = cursor[key] || 0;
+    const date = dates.length ? dates[cursor[key] % dates.length] : trip.startDate;
+    cursor[key]++;
+    const day = dayFor(date);
+    if (!day.location && stop) day.location = stop.place;
+    const category = group === 'restaurants' ? 'repas' : mapProposalCategory(item.type);
+    const time = group === 'restaurants' ? '19:30' : times[activities % times.length];
+    day.activities.push({ id: uid('act'), time, endTime: '', title: item.title, category, location: stop ? stop.place : '', lat: '', lng: '', cost: item.price, status: 'sélectionné', bookingUrl: item.url, notes: item.note });
+    day.activities.sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+    activities++;
+  });
+
+  trip.days.sort((a, b) => a.date.localeCompare(b.date));
+  const tasks = addChecklistFromSelection(trip, selection);
+  selection.forEach(({ item }) => { item.selected = false; });
+  saveState(`Intégré : ${activities} activité(s), ${reservations} réservation(s), ${tasks} tâche(s).`);
+  navigate('itinerary');
 }
 
 function boot() {
