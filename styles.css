@@ -236,7 +236,7 @@ td { font-size: .91rem; }
   .mobile-nav a { display: grid; place-items: center; gap: 2px; min-height: 45px; border-radius: 12px; text-decoration: none; color: var(--muted); font-weight: 850; }
   .mobile-nav a.active { background: var(--surface-2); color: var(--ink); }
   .mobile-nav small { font-size: .62rem; }
-  .page-head { align-items: flex-start; }
+  .page-head { flex-direction: column; align-items: stretch; }
   .page-head h1 { font-size: 2rem; }
   .page-actions { justify-content: flex-start; }
   .hero { grid-template-columns: 1fr; }

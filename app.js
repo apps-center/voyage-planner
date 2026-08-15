@@ -24,6 +24,12 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const uid = (prefix = 'id') => `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 const clone = value => JSON.parse(JSON.stringify(value));
 const esc = value => String(value ?? '').replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+const safeUrl = value => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+  try { return ['http:', 'https:', 'mailto:'].includes(new URL(raw, location.href).protocol) ? raw : ''; }
+  catch { return ''; }
+};
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const asNumber = value => Number.parseFloat(value) || 0;
 const formatMoney = (value, currency = 'EUR') => new Intl.NumberFormat('fr-FR', { style: 'currency', currency, maximumFractionDigits: 0 }).format(asNumber(value));
@@ -123,10 +129,29 @@ let currentMapDay = 'all';
 let modalSubmitHandler = null;
 let draggedActivity = null;
 
+function normalizeState(data) {
+  const fallback = sampleState();
+  const prefs = data.preferences || {};
+  data.preferences = {
+    destinations: Array.isArray(prefs.destinations) ? prefs.destinations : fallback.preferences.destinations,
+    activities: Array.isArray(prefs.activities) ? prefs.activities : fallback.preferences.activities,
+    travelers: Array.isArray(prefs.travelers) ? prefs.travelers : fallback.preferences.travelers
+  };
+  data.trips.forEach(trip => {
+    trip.days = Array.isArray(trip.days) ? trip.days : [];
+    trip.days.forEach(day => { day.activities = Array.isArray(day.activities) ? day.activities : []; });
+    trip.expenses = Array.isArray(trip.expenses) ? trip.expenses : [];
+    trip.reservations = Array.isArray(trip.reservations) ? trip.reservations : [];
+    trip.checklist = Array.isArray(trip.checklist) ? trip.checklist : [];
+    trip.resources = Array.isArray(trip.resources) ? trip.resources : [];
+  });
+  return data;
+}
+
 function loadState() {
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (stored?.trips?.length) return stored;
+    if (stored?.trips?.length) return normalizeState(stored);
   } catch (error) {
     console.warn('Données locales illisibles', error);
   }
@@ -171,9 +196,12 @@ function tripDuration(trip) {
 
 function syncTripDays(trip) {
   const dates = enumerateDates(trip.startDate, trip.endDate);
-  if (!dates.length) return;
+  if (!dates.length) return 0;
   const byDate = new Map(trip.days.map(day => [day.date, day]));
+  const kept = new Set(dates);
+  const droppedWithActivities = trip.days.filter(day => !kept.has(day.date) && day.activities.length).length;
   trip.days = dates.map((date, index) => byDate.get(date) || ({ id: uid('day'), date, title: `Journée ${index + 1}`, location: '', activities: [] }));
+  return droppedWithActivities;
 }
 
 function plannedTotal(trip) {
@@ -224,7 +252,7 @@ function renderOverview() {
   const actual = actualTotal(trip);
   const checklistDone = trip.checklist.filter(item => item.done).length;
   const checklistPct = trip.checklist.length ? Math.round(checklistDone / trip.checklist.length * 100) : 0;
-  const reservationsReady = trip.reservations.filter(item => item.confirmation || item.type === 'Hébergement').length;
+  const reservationsReady = trip.reservations.filter(item => item.confirmation).length;
   const nextActivities = activities.filter(item => item.day.date >= todayIso()).sort((a,b) => `${a.day.date}${a.time}`.localeCompare(`${b.day.date}${b.time}`)).slice(0, 5);
   const activityTypes = activities.reduce((acc, item) => { acc[item.category] = (acc[item.category] || 0) + 1; return acc; }, {});
 
@@ -415,7 +443,7 @@ function renderReservations() {
       <div class="card-head"><div><span class="badge accent">${esc(item.type)}</span></div><div><button class="icon-btn" data-action="edit-reservation" data-id="${item.id}">✎</button><button class="icon-btn" data-action="delete-reservation" data-id="${item.id}">×</button></div></div>
       <h3>${esc(item.name)}</h3><p class="muted">${esc(item.provider || 'Prestataire à définir')}</p>
       <div class="grid" style="gap:9px;margin-top:18px"><span>📅 ${item.start ? formatDate(item.start,{day:'numeric',month:'short',year:'numeric'}) : '-'}${item.end && item.end !== item.start ? ` au ${formatDate(item.end,{day:'numeric',month:'short',year:'numeric'})}` : ''}</span><span>🔐 ${esc(item.confirmation || 'Confirmation à renseigner')}</span><span>💳 ${formatMoney(item.cost, trip.currency)}</span></div>
-      ${item.notes ? `<p class="muted">${esc(item.notes)}</p>` : ''}${item.url ? `<a class="btn btn-secondary btn-small" href="${esc(item.url)}" target="_blank" rel="noopener">Ouvrir le lien</a>` : ''}
+      ${item.notes ? `<p class="muted">${esc(item.notes)}</p>` : ''}${safeUrl(item.url) ? `<a class="btn btn-secondary btn-small" href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">Ouvrir le lien</a>` : ''}
     </article>`).join('') : `<article class="card empty-state" style="grid-column:1/-1"><span class="big">🎟️</span>Aucune réservation enregistrée.</article>`}</section>
   </div>`;
 }
@@ -437,7 +465,7 @@ function renderResources() {
   const selected = trip.resources.filter(item => item.status === 'sélectionné').length;
   $('#main-content').innerHTML = `<div class="page">
     ${pageHeader('Exploration', 'Inspirations et favoris', `${selected} ressource${selected > 1 ? 's' : ''} sélectionnée${selected > 1 ? 's' : ''}.`, `<button class="btn btn-secondary" data-action="geocode-search">⌕ Trouver un lieu</button><button class="btn btn-primary" data-action="add-resource">+ Ajouter une inspiration</button>`)}
-    <section class="resource-grid">${trip.resources.length ? trip.resources.map(item => `<article class="card resource-card"><div class="resource-icon">${resourceIcon(item.type)}</div><div class="card-head"><div><span class="badge ${item.status === 'sélectionné' ? 'success' : ''}">${esc(item.status || 'potentiel')}</span></div><div><button class="icon-btn" data-action="edit-resource" data-id="${item.id}">✎</button><button class="icon-btn" data-action="delete-resource" data-id="${item.id}">×</button></div></div><h3>${esc(item.title)}</h3><p>${esc(item.notes || item.location || 'Aucune note')}</p><div style="display:flex;gap:7px;flex-wrap:wrap"><span class="badge">${esc(item.type)}</span>${item.location ? `<span class="badge">📍 ${esc(item.location)}</span>` : ''}</div>${item.url ? `<p><a href="${esc(item.url)}" target="_blank" rel="noopener">Consulter la ressource ↗</a></p>` : ''}</article>`).join('') : `<article class="card empty-state" style="grid-column:1/-1"><span class="big">☆</span>Enregistrez ici vos hôtels, parcours, restaurants et idées.</article>`}</section>
+    <section class="resource-grid">${trip.resources.length ? trip.resources.map(item => `<article class="card resource-card"><div class="resource-icon">${resourceIcon(item.type)}</div><div class="card-head"><div><span class="badge ${item.status === 'sélectionné' ? 'success' : ''}">${esc(item.status || 'potentiel')}</span></div><div><button class="icon-btn" data-action="edit-resource" data-id="${item.id}">✎</button><button class="icon-btn" data-action="delete-resource" data-id="${item.id}">×</button></div></div><h3>${esc(item.title)}</h3><p>${esc(item.notes || item.location || 'Aucune note')}</p><div style="display:flex;gap:7px;flex-wrap:wrap"><span class="badge">${esc(item.type)}</span>${item.location ? `<span class="badge">📍 ${esc(item.location)}</span>` : ''}</div>${safeUrl(item.url) ? `<p><a href="${esc(safeUrl(item.url))}" target="_blank" rel="noopener">Consulter la ressource ↗</a></p>` : ''}</article>`).join('') : `<article class="card empty-state" style="grid-column:1/-1"><span class="big">☆</span>Enregistrez ici vos hôtels, parcours, restaurants et idées.</article>`}</section>
   </div>`;
 }
 
@@ -509,16 +537,17 @@ function openTripForm(trip = null) {
     onSubmit: form => {
       const data = formDataObject(form);
       if (data.endDate < data.startDate) return toast('La date de retour doit suivre la date de départ.');
+      let droppedDays = 0;
       if (isEdit) {
         Object.assign(trip, data, { travelers: Number(data.travelers), totalBudget: asNumber(data.totalBudget) });
-        syncTripDays(trip);
+        droppedDays = syncTripDays(trip);
       } else {
         const newTrip = { id: uid('trip'), ...data, travelers:Number(data.travelers), totalBudget:asNumber(data.totalBudget), days:[], expenses:[], reservations:[], checklist:[], resources:[] };
         syncTripDays(newTrip);
         state.trips.push(newTrip);
         state.activeTripId = newTrip.id;
       }
-      saveState(isEdit ? 'Voyage mis à jour.' : 'Nouveau voyage créé.');
+      saveState(isEdit ? (droppedDays ? `Voyage mis à jour. ${droppedDays} journée(s) hors dates retirée(s).` : 'Voyage mis à jour.') : 'Nouveau voyage créé.');
       closeModal(); renderTripSelect(); renderPage();
     }
   });
@@ -637,7 +666,7 @@ function exportData() {
 }
 
 async function importData(file) {
-  try { const data=JSON.parse(await file.text()); if(!Array.isArray(data.trips)||!data.trips.length) throw new Error('Format non reconnu'); state=data;ensureActiveTrip();saveState('Sauvegarde importée.');setTheme(state.theme||'light');renderTripSelect();renderPage(); }
+  try { const data=JSON.parse(await file.text()); if(!Array.isArray(data.trips)||!data.trips.length) throw new Error('Format non reconnu'); state=normalizeState(data);ensureActiveTrip();saveState('Sauvegarde importée.');setTheme(state.theme||'light');renderTripSelect();renderPage(); }
   catch(error){toast(`Import impossible: ${error.message}`);}
 }
 
@@ -665,7 +694,7 @@ function handleAction(action,node) {
     case 'add-day': openDayForm(); break;
     case 'edit-day': openDayForm(findDay(node.dataset.id)); break;
     case 'delete-day': if(confirm('Supprimer cette journée et ses activités ?')){deleteById(trip.days,node.dataset.id);saveState('Journée supprimée.');renderPage();}break;
-    case 'sync-days': syncTripDays(trip);saveState('Journées synchronisées avec les dates.');renderPage();break;
+    case 'sync-days': {const dropped=syncTripDays(trip);saveState(dropped?`${dropped} journée(s) hors dates retirée(s) avec leurs activités.`:'Journées synchronisées avec les dates.');renderPage();break;}
     case 'add-activity': openActivityForm(findDay(node.dataset.id)); break;
     case 'edit-activity': openActivityForm(findDay(node.dataset.day),findActivity(node.dataset.day,node.dataset.id)); break;
     case 'delete-activity': {const day=findDay(node.dataset.day);if(day&&confirm('Supprimer cette activité ?')){deleteById(day.activities,node.dataset.id);saveState('Activité supprimée.');renderPage();}break;}
@@ -718,7 +747,17 @@ function bindGlobalEvents() {
   $('#modal-close').addEventListener('click',closeModal);$('#modal-cancel').addEventListener('click',closeModal);
   $('#modal-backdrop').addEventListener('click',event=>{if(event.target===event.currentTarget)closeModal();});
   $('#modal-form').addEventListener('submit',event=>{event.preventDefault();if(modalSubmitHandler)modalSubmitHandler(event.currentTarget);});
-  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!$('#modal-backdrop').classList.contains('hidden'))closeModal();});
+  document.addEventListener('keydown',event=>{
+    if($('#modal-backdrop').classList.contains('hidden'))return;
+    if(event.key==='Escape'){closeModal();return;}
+    if(event.key==='Tab'){
+      const focusables=$$('#modal-backdrop button, #modal-backdrop input, #modal-backdrop select, #modal-backdrop textarea, #modal-backdrop a[href]').filter(node=>!node.disabled&&node.offsetParent!==null);
+      if(!focusables.length)return;
+      const first=focusables[0],last=focusables[focusables.length-1];
+      if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+      else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
+    }
+  });
 }
 
 function boot() {
