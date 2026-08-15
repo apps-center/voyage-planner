@@ -71,6 +71,7 @@ const safeUrl = value => {
   catch { return ''; }
 };
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+const isCoord = value => value !== '' && value !== null && value !== undefined && Number.isFinite(Number(value));
 const asNumber = value => Number.parseFloat(value) || 0;
 const formatMoney = (value, currency = 'EUR') => new Intl.NumberFormat('fr-FR', { style: 'currency', currency, maximumFractionDigits: 0 }).format(asNumber(value));
 const formatDate = (value, options = { weekday: 'long', day: 'numeric', month: 'long' }) => value ? new Intl.DateTimeFormat('fr-FR', options).format(new Date(`${value}T12:00:00`)) : 'Date à définir';
@@ -503,10 +504,10 @@ function renderMapPage() {
 }
 
 function mapPlaces(trip, dayFilter = 'all') {
-  const activities = trip.days.flatMap((day, dayIndex) => day.activities.filter(item => Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))).map(item => ({
+  const activities = trip.days.flatMap((day, dayIndex) => day.activities.filter(item => isCoord(item.lat) && isCoord(item.lng)).map(item => ({
     id: item.id, type: 'Activité', title: item.title, location: item.location, lat: Number(item.lat), lng: Number(item.lng), dayId: day.id, dayLabel: `Jour ${dayIndex + 1}`, icon: CATEGORIES[item.category]?.[0] || '✨'
   }))).filter(place => dayFilter === 'all' || place.dayId === dayFilter);
-  const resources = dayFilter === 'all' ? trip.resources.filter(item => Number.isFinite(Number(item.lat)) && Number.isFinite(Number(item.lng))).map(item => ({ id: item.id, type: item.type, title: item.title, location: item.location, lat: Number(item.lat), lng: Number(item.lng), icon: '☆' })) : [];
+  const resources = dayFilter === 'all' ? trip.resources.filter(item => isCoord(item.lat) && isCoord(item.lng)).map(item => ({ id: item.id, type: item.type, title: item.title, location: item.location, lat: Number(item.lat), lng: Number(item.lng), icon: '☆' })) : [];
   return [...activities, ...resources];
 }
 
@@ -525,6 +526,7 @@ function initMap(places) {
   if (latlngs.length > 1) L.polyline(latlngs, { color: '#d16642', weight: 3, opacity: .7, dashArray: '8 8' }).addTo(mapLayer);
   if (latlngs.length) map.fitBounds(latlngs, { padding: [40, 40], maxZoom: 12 });
   else map.setView([45.5, 5], 4);
+  setTimeout(() => map && map.invalidateSize(), 120);
   $$('.map-place').forEach(node => node.addEventListener('click', () => {
     const place = places[Number(node.dataset.mapIndex)];
     if (place?.marker) { map.setView([place.lat, place.lng], Math.max(map.getZoom(), 12)); place.marker.openPopup(); }
@@ -1045,7 +1047,7 @@ function renderStep2(trip, stops, nightsSum, duration) {
 }
 
 function stopsDistanceKm(stops) {
-  const pts = stops.filter(stop => stop.lat !== '' && stop.lng !== '' && Number.isFinite(Number(stop.lat)) && Number.isFinite(Number(stop.lng))).map(stop => [Number(stop.lat), Number(stop.lng)]);
+  const pts = stops.filter(stop => isCoord(stop.lat) && isCoord(stop.lng)).map(stop => [Number(stop.lat), Number(stop.lng)]);
   let total = 0;
   for (let i = 1; i < pts.length; i++) total += haversineKm(pts[i - 1], pts[i]);
   return Math.round(total);
@@ -1064,7 +1066,7 @@ function initStopsMap() {
   if (stepMap) { stepMap.remove(); stepMap = null; }
   const el = $('#stops-map');
   if (!el || !window.L) return;
-  const stops = activeTrip().stops.filter(stop => stop.lat !== '' && stop.lng !== '' && Number.isFinite(Number(stop.lat)) && Number.isFinite(Number(stop.lng)));
+  const stops = activeTrip().stops.filter(stop => isCoord(stop.lat) && isCoord(stop.lng));
   stepMap = L.map('stops-map', { zoomControl: true }).setView([46.8, 8.2], 5);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(stepMap);
   const layer = L.layerGroup().addTo(stepMap);
@@ -1075,6 +1077,7 @@ function initStopsMap() {
   });
   if (latlngs.length > 1) L.polyline(latlngs, { color: '#d16642', weight: 3, opacity: .8, dashArray: '6 8' }).addTo(layer);
   if (latlngs.length) stepMap.fitBounds(latlngs, { padding: [40, 40], maxZoom: 10 });
+  setTimeout(() => stepMap && stepMap.invalidateSize(), 120);
   stepMap.on('click', event => openStopFromMap(event.latlng.lat, event.latlng.lng));
 }
 
