@@ -31,6 +31,11 @@ const WANTED_ACTIVITIES = [
   ['rando', '🥾', 'Randonnée'], ['musee', '🏛️', 'Musées'], ['shopping', '🛍️', 'Shopping'],
   ['poi', '📸', 'Lieux d’intérêt'], ['nature', '🌿', 'Nature'], ['gastronomie', '🍽️', 'Gastronomie'], ['nautique', '⛵', 'Nautique']
 ];
+const TRANSPORT_MODES = [
+  ['avion', '✈️', 'Avion'], ['train', '🚆', 'Train'], ['voiture_perso', '🚗', 'Voiture perso'],
+  ['voiture_loc', '🚙', 'Voiture location'], ['velo', '🚴', 'Vélo'], ['bateau', '⛴️', 'Bateau']
+];
+const BUDGET_BANDS = [[200, 500], [500, 1000], [1000, 3000], [2000, 6000], [5000, 10000], [10000, 20000]];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -94,8 +99,9 @@ function sampleState() {
       notes: 'Un séjour nature avec randonnées, baignades et une journée de golf.',
       brief: {
         mode: 'itinerant', adults: 2, children: [{ age: 8 }, { age: 11 }],
-        budgetMin: 4000, budgetMax: 5000, spirit: ['nature', 'aventure', 'famille']
+        budgetMin: 2000, budgetMax: 6000, spirit: ['nature', 'aventure', 'famille'], transport: ['avion', 'voiture_loc']
       },
+      proposals: {},
       stops: [
         { id: uid('stop'), place: 'Ponta Delgada', lat: 37.7412, lng: -25.6756, nights: 3, lodgingType: 'Airbnb', comfort: 'Confort', lunchOut: false, dinnerOut: true, wantedActivities: ['rando', 'baignade', 'poi'] },
         { id: uid('stop'), place: 'Furnas', lat: 37.7721, lng: -25.3132, nights: 4, lodgingType: 'Hôtel', comfort: 'Supérieur', lunchOut: true, dinnerOut: true, wantedActivities: ['nature', 'gastronomie', 'rando'] }
@@ -150,23 +156,55 @@ let currentMapDay = 'all';
 let modalSubmitHandler = null;
 let draggedActivity = null;
 let currentStep = 1;
+let calendarMonth = null;
+let stepMap = null;
 
 function defaultBrief() {
-  return { mode: 'itinerant', adults: 2, children: [], budgetMin: 0, budgetMax: 0, spirit: [] };
+  return { mode: 'itinerant', adults: 2, children: [], budgetMin: 0, budgetMax: 0, spirit: [], transport: [] };
 }
 
 function normalizeBrief(brief) {
   brief = brief && typeof brief === 'object' ? brief : {};
   return {
     mode: brief.mode === 'sedentaire' ? 'sedentaire' : 'itinerant',
-    adults: Number.isFinite(+brief.adults) ? Math.max(0, Math.round(+brief.adults)) : 2,
+    adults: Number.isFinite(+brief.adults) ? Math.max(1, Math.round(+brief.adults)) : 2,
     children: Array.isArray(brief.children)
-      ? brief.children.map(child => ({ age: Number.isFinite(+child?.age) ? Math.max(0, Math.round(+child.age)) : 0 }))
+      ? brief.children.map(child => ({ age: Number.isFinite(+child?.age) ? clamp(Math.round(+child.age), 0, 17) : 6 }))
       : [],
     budgetMin: asNumber(brief.budgetMin),
     budgetMax: asNumber(brief.budgetMax),
-    spirit: Array.isArray(brief.spirit) ? brief.spirit.filter(tag => typeof tag === 'string') : []
+    spirit: Array.isArray(brief.spirit) ? brief.spirit.filter(tag => typeof tag === 'string') : [],
+    transport: Array.isArray(brief.transport) ? brief.transport.filter(mode => typeof mode === 'string') : []
   };
+}
+
+function normalizeProposalItem(item) {
+  item = item && typeof item === 'object' ? item : {};
+  return {
+    id: item.id || uid('prop'),
+    title: String(item.title || ''),
+    url: String(item.url || ''),
+    price: asNumber(item.price),
+    rating: asNumber(item.rating),
+    type: String(item.type || ''),
+    cuisine: String(item.cuisine || ''),
+    area: String(item.area || ''),
+    note: String(item.note || ''),
+    selected: !!item.selected
+  };
+}
+
+function normalizeProposals(proposals) {
+  if (!proposals || typeof proposals !== 'object' || Array.isArray(proposals)) return {};
+  const clean = {};
+  Object.entries(proposals).forEach(([stopId, groups]) => {
+    clean[stopId] = {
+      hotels: Array.isArray(groups?.hotels) ? groups.hotels.map(normalizeProposalItem) : [],
+      restaurants: Array.isArray(groups?.restaurants) ? groups.restaurants.map(normalizeProposalItem) : [],
+      activities: Array.isArray(groups?.activities) ? groups.activities.map(normalizeProposalItem) : []
+    };
+  });
+  return clean;
 }
 
 function normalizeStop(stop) {
@@ -202,6 +240,7 @@ function normalizeState(data) {
     trip.resources = Array.isArray(trip.resources) ? trip.resources : [];
     trip.brief = normalizeBrief(trip.brief);
     trip.stops = Array.isArray(trip.stops) ? trip.stops.map(normalizeStop) : [];
+    trip.proposals = normalizeProposals(trip.proposals);
   });
   return data;
 }
@@ -288,6 +327,7 @@ function updateNav() {
 }
 
 function navigate(page) {
+  if (stepMap && page !== 'create') { stepMap.remove(); stepMap = null; }
   currentPage = page;
   if (location.hash !== `#${page}`) history.pushState(null, '', `#${page}`);
   updateNav();
@@ -297,7 +337,7 @@ function navigate(page) {
 
 function renderPage() {
   ensureActiveTrip();
-  const renderers = { overview: renderOverview, create: renderCreate, itinerary: renderItinerary, map: renderMapPage, budget: renderBudget, reservations: renderReservations, checklist: renderChecklist, resources: renderResources, settings: renderSettings };
+  const renderers = { overview: renderOverview, create: renderCreate, proposals: renderProposals, itinerary: renderItinerary, map: renderMapPage, budget: renderBudget, reservations: renderReservations, checklist: renderChecklist, resources: renderResources, settings: renderSettings };
   (renderers[currentPage] || renderOverview)();
 }
 
@@ -602,7 +642,7 @@ function openTripForm(trip = null) {
         Object.assign(trip, data, { travelers: Number(data.travelers), totalBudget: asNumber(data.totalBudget) });
         droppedDays = syncTripDays(trip);
       } else {
-        const newTrip = { id: uid('trip'), ...data, travelers:Number(data.travelers), totalBudget:asNumber(data.totalBudget), days:[], expenses:[], reservations:[], checklist:[], resources:[], stops:[], brief: normalizeBrief({ adults: Number(data.travelers), budgetMax: asNumber(data.totalBudget) }) };
+        const newTrip = { id: uid('trip'), ...data, travelers:Number(data.travelers), totalBudget:asNumber(data.totalBudget), days:[], expenses:[], reservations:[], checklist:[], resources:[], stops:[], proposals:{}, brief: normalizeBrief({ adults: Number(data.travelers), budgetMax: asNumber(data.totalBudget) }) };
         syncTripDays(newTrip);
         state.trips.push(newTrip);
         state.activeTripId = newTrip.id;
@@ -728,7 +768,12 @@ function exportData() {
 }
 
 async function importData(file) {
-  try { const data=JSON.parse(await file.text()); if(!Array.isArray(data.trips)||!data.trips.length) throw new Error('Format non reconnu'); state=normalizeState(data);ensureActiveTrip();saveState('Sauvegarde importée.');setTheme(state.theme||'light');renderTripSelect();renderPage(); }
+  try {
+    const data=JSON.parse(await file.text());
+    if(data && data.schema==='propositions_v1'){ importPropositions(data); return; }
+    if(!Array.isArray(data.trips)||!data.trips.length) throw new Error('Format non reconnu');
+    state=normalizeState(data);ensureActiveTrip();saveState('Sauvegarde importée.');setTheme(state.theme||'light');renderTripSelect();renderPage();
+  }
   catch(error){toast(`Import impossible: ${error.message}`);}
 }
 
@@ -781,7 +826,16 @@ function handleAction(action,node) {
     case 'edit-trip': openTripForm(trip);break;
     case 'duplicate-trip': {const copyTrip=clone(trip);copyTrip.id=uid('trip');copyTrip.name=`${trip.name} - copie`;state.trips.push(copyTrip);state.activeTripId=copyTrip.id;saveState('Voyage dupliqué.');renderTripSelect();renderPage();break;}
     case 'delete-trip': if(state.trips.length===1){toast('Conservez au moins un voyage.');break;} if(confirm(`Supprimer « ${trip.name} » ?`)){deleteById(state.trips,trip.id);state.activeTripId=state.trips[0].id;saveState('Voyage supprimé.');renderTripSelect();renderPage();}break;
-    case 'go-create': currentStep=1; navigate('create'); break;
+    case 'go-create': currentStep=1; calendarMonth=(trip.startDate||todayIso()).slice(0,7); navigate('create'); break;
+    case 'cal-pick': { readStep1Form(); const d=node.dataset.date; if(!trip.startDate||(trip.startDate&&trip.endDate)){trip.startDate=d;trip.endDate='';} else if(d<trip.startDate){trip.startDate=d;} else {trip.endDate=d;} if(trip.startDate&&trip.endDate)syncTripDays(trip); calendarMonth=d.slice(0,7); saveState(); renderPage(); break; }
+    case 'cal-prev': case 'cal-next': { readStep1Form(); const base=(calendarMonth||trip.startDate||todayIso()).slice(0,7); let [y,m]=base.split('-').map(Number); m+=action==='cal-next'?1:-1; if(m<1){m=12;y--;} if(m>12){m=1;y++;} calendarMonth=`${y}-${String(m).padStart(2,'0')}`; renderPage(); break; }
+    case 'adults-inc': readStep1Form(); trip.brief.adults=clamp(trip.brief.adults+1,1,12); trip.travelers=Math.max(1,trip.brief.adults+trip.brief.children.length); saveState(); renderPage(); break;
+    case 'adults-dec': readStep1Form(); trip.brief.adults=clamp(trip.brief.adults-1,1,12); trip.travelers=Math.max(1,trip.brief.adults+trip.brief.children.length); saveState(); renderPage(); break;
+    case 'children-inc': readStep1Form(); if(trip.brief.children.length<8)trip.brief.children.push({age:6}); trip.travelers=Math.max(1,trip.brief.adults+trip.brief.children.length); saveState(); renderPage(); break;
+    case 'children-dec': readStep1Form(); trip.brief.children.pop(); trip.travelers=Math.max(1,trip.brief.adults+trip.brief.children.length); saveState(); renderPage(); break;
+    case 'toggle-proposal': { const group=trip.proposals?.[node.dataset.stop]?.[node.dataset.group]; const item=group?.find(x=>x.id===node.dataset.id); if(item){item.selected=node.checked;saveState();} break; }
+    case 'add-selected-to-resources': addSelectedProposals(); break;
+    case 'clear-proposals': if(confirm('Retirer toutes les propositions importées ?')){trip.proposals={};saveState('Propositions retirées.');renderPage();}break;
     case 'create-next': applyCreateStep(currentStep); currentStep=Math.min(4,currentStep+1); renderPage(); break;
     case 'create-prev': applyCreateStep(currentStep); currentStep=Math.max(1,currentStep-1); renderPage(); break;
     case 'create-step': applyCreateStep(currentStep); currentStep=clamp(Number(node.dataset.step)||1,1,4); renderPage(); break;
@@ -864,24 +918,87 @@ function renderCreate() {
     <section class="card card-pad create-body">${bodies[currentStep] || ''}</section>
     ${footer}
   </div>`;
+  if (currentStep === 2) setTimeout(() => initStopsMap(), 0);
+  else if (stepMap) { stepMap.remove(); stepMap = null; }
 }
 
 function renderStep1(trip, brief) {
   const modeButtons = TRIP_MODES.map(([val, icon, label]) => `<label class="pick ${brief.mode === val ? 'active' : ''}"><input type="radio" name="mode" value="${val}" ${brief.mode === val ? 'checked' : ''}><span>${icon} ${label}</span></label>`).join('');
   const spiritChips = SPIRIT_TAGS.map(([val, icon, label]) => `<label class="chip-check ${brief.spirit.includes(val) ? 'active' : ''}"><input type="checkbox" name="spirit" value="${val}" ${brief.spirit.includes(val) ? 'checked' : ''}><span>${icon} ${esc(label)}</span></label>`).join('');
-  const ages = brief.children.map(child => child.age).join(', ');
+  const transportChips = TRANSPORT_MODES.map(([val, icon, label]) => `<label class="chip-check ${brief.transport.includes(val) ? 'active' : ''}"><input type="checkbox" name="transport" value="${val}" ${brief.transport.includes(val) ? 'checked' : ''}><span>${icon} ${esc(label)}</span></label>`).join('');
+  const bandOptions = ['<option value="">— au choix —</option>'].concat(BUDGET_BANDS.map(([min, max]) => {
+    const selected = brief.budgetMin === min && brief.budgetMax === max ? 'selected' : '';
+    return `<option value="${min}-${max}" ${selected}>${formatMoney(min, trip.currency)} – ${formatMoney(max, trip.currency)}</option>`;
+  })).join('');
+  const childrenAges = brief.children.map((child, index) => `<div class="child-age"><label for="field-age_${index}">Enfant ${index + 1}</label><select id="field-age_${index}" name="age_${index}">${Array.from({ length: 18 }, (_, age) => `<option value="${age}" ${child.age === age ? 'selected' : ''}>${age} an${age > 1 ? 's' : ''}</option>`).join('')}</select></div>`).join('');
   return `<form id="step-form">
+    <div class="field full"><label>Dates du voyage</label>${renderCalendar(trip)}</div>
+    <div class="counters">
+      <div class="counter"><div class="counter-info"><strong>Adultes</strong><small>13 ans et +</small></div><div class="counter-ctl"><button type="button" class="icon-btn" data-action="adults-dec" ${brief.adults <= 1 ? 'disabled' : ''}>−</button><span>${brief.adults}</span><button type="button" class="icon-btn" data-action="adults-inc">+</button></div></div>
+      <div class="counter"><div class="counter-info"><strong>Enfants</strong><small>0 à 17 ans</small></div><div class="counter-ctl"><button type="button" class="icon-btn" data-action="children-dec" ${brief.children.length <= 0 ? 'disabled' : ''}>−</button><span>${brief.children.length}</span><button type="button" class="icon-btn" data-action="children-inc">+</button></div></div>
+    </div>
+    ${brief.children.length ? `<div class="children-ages">${childrenAges}</div>` : ''}
     <div class="form-grid">
-      ${inputField('startDate', 'Date de départ', 'date', trip.startDate, 'required')}
-      ${inputField('endDate', 'Date de retour', 'date', trip.endDate, 'required')}
-      ${selectField('adults', 'Adultes', [1, 2, 3, 4, 5, 6, 7, 8], brief.adults)}
-      ${inputField('childrenAges', 'Âges des enfants', 'text', ages, 'placeholder="ex. 8, 11" class="full"')}
-      ${inputField('budgetMin', 'Budget min', 'number', brief.budgetMin, 'min="0" step="50"')}
-      ${inputField('budgetMax', 'Budget max', 'number', brief.budgetMax, 'min="0" step="50"')}
+      <div class="field"><label for="field-budgetBand">Budget indicatif</label><select id="field-budgetBand" name="budgetBand">${bandOptions}</select></div>
     </div>
     <div class="field full"><label>Mode de séjour</label><div class="mode-pick">${modeButtons}</div></div>
+    <div class="field full"><label>Moyens de déplacement</label><div class="chip-checks">${transportChips}</div></div>
     <div class="field full"><label>Esprit / ambiance recherchée</label><div class="chip-checks">${spiritChips}</div></div>
   </form>`;
+}
+
+function renderCalendar(trip) {
+  const base = (calendarMonth || trip.startDate || todayIso()).slice(0, 7);
+  const [year, month1] = base.split('-').map(Number);
+  const month = month1 - 1;
+  const first = new Date(Date.UTC(year, month, 1));
+  const startWeekday = (first.getUTCDay() + 6) % 7;
+  const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  const monthLabel = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(first);
+  const weekdays = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'].map(day => `<span class="cal-wd">${day}</span>`).join('');
+  const cells = [];
+  for (let i = 0; i < startWeekday; i++) cells.push('<span class="cal-empty"></span>');
+  for (let day = 1; day <= daysInMonth; day++) {
+    const iso = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const isStart = iso === trip.startDate;
+    const isEnd = iso === trip.endDate;
+    const inRange = trip.startDate && trip.endDate && iso > trip.startDate && iso < trip.endDate;
+    const cls = [isStart ? 'start' : '', isEnd ? 'end' : '', inRange ? 'in' : ''].filter(Boolean).join(' ');
+    cells.push(`<button type="button" class="cal-day ${cls}" data-action="cal-pick" data-date="${iso}">${day}</button>`);
+  }
+  const info = !trip.startDate ? 'Cliquez le jour de départ, puis le jour de retour.'
+    : !trip.endDate ? `Départ : ${formatDate(trip.startDate, { day: 'numeric', month: 'short', year: 'numeric' })} — cliquez le jour de retour.`
+    : `${formatDate(trip.startDate, { day: 'numeric', month: 'short' })} → ${formatDate(trip.endDate, { day: 'numeric', month: 'short', year: 'numeric' })} · ${dateDiff(trip.startDate, trip.endDate) + 1} jours`;
+  return `<div class="calendar">
+    <div class="cal-head"><button type="button" class="icon-btn" data-action="cal-prev" aria-label="Mois précédent">‹</button><strong>${esc(monthLabel)}</strong><button type="button" class="icon-btn" data-action="cal-next" aria-label="Mois suivant">›</button></div>
+    <div class="cal-grid">${weekdays}${cells.join('')}</div>
+    <p class="cal-info">${esc(info)}</p>
+  </div>`;
+}
+
+function readStep1Form() {
+  const form = $('#step-form');
+  if (!form) return;
+  const trip = activeTrip();
+  const data = new FormData(form);
+  const band = String(data.get('budgetBand') || '');
+  const [bandMin, bandMax] = band ? band.split('-').map(Number) : [trip.brief.budgetMin, trip.brief.budgetMax];
+  const ages = trip.brief.children.map((child, index) => {
+    const value = parseInt(data.get('age_' + index), 10);
+    return { age: Number.isFinite(value) ? value : child.age };
+  });
+  trip.brief = normalizeBrief({
+    mode: data.get('mode') || trip.brief.mode,
+    adults: trip.brief.adults,
+    children: ages,
+    budgetMin: bandMin,
+    budgetMax: bandMax,
+    spirit: data.getAll('spirit'),
+    transport: data.getAll('transport')
+  });
+  trip.travelers = Math.max(1, trip.brief.adults + trip.brief.children.length);
+  if (trip.brief.budgetMax) trip.totalBudget = trip.brief.budgetMax;
+  saveState();
 }
 
 function renderStep2(trip, stops, nightsSum, duration) {
@@ -895,11 +1012,60 @@ function renderStep2(trip, stops, nightsSum, duration) {
       <button class="icon-btn" data-action="delete-stop" data-id="${stop.id}" title="Supprimer">×</button>
     </div>
   </article>`).join('') : `<div class="empty-state"><span class="big">🗺️</span>Ajoutez les villes ou régions où vous séjournez.</div>`;
+  const distance = stopsDistanceKm(stops);
   return `<div class="stack">
-    <div class="create-head"><p class="muted">Ajoutez chaque ville/région et le nombre de nuits sur place.${trip.brief.mode === 'sedentaire' ? ' Mode sédentaire : une base unique suffit généralement.' : ''}</p><button class="btn btn-primary btn-small" data-action="add-stop">+ Ajouter une étape</button></div>
-    <div class="nights-note">∑ nuits saisies : <strong>${nightsSum}</strong> · durée du voyage : <strong>${duration} jour${duration > 1 ? 's' : ''}</strong></div>
+    <div class="create-head"><p class="muted">Ajoutez chaque ville/région et le nombre de nuits.${trip.brief.mode === 'sedentaire' ? ' Mode sédentaire : une base unique suffit généralement.' : ''} Cliquez la carte pour poser un repère.</p><button class="btn btn-primary btn-small" data-action="add-stop">+ Ajouter une étape</button></div>
+    <div class="nights-note">∑ nuits saisies : <strong>${nightsSum}</strong> · durée du voyage : <strong>${duration} jour${duration > 1 ? 's' : ''}</strong>${distance ? ` · distance à vol d'oiseau : <strong>${distance} km</strong>` : ''}</div>
+    <div id="stops-map" class="stops-map" aria-label="Carte des étapes"></div>
     <div class="stops-list">${list}</div>
   </div>`;
+}
+
+function stopsDistanceKm(stops) {
+  const pts = stops.filter(stop => stop.lat !== '' && stop.lng !== '' && Number.isFinite(Number(stop.lat)) && Number.isFinite(Number(stop.lng))).map(stop => [Number(stop.lat), Number(stop.lng)]);
+  let total = 0;
+  for (let i = 1; i < pts.length; i++) total += haversineKm(pts[i - 1], pts[i]);
+  return Math.round(total);
+}
+
+function haversineKm(a, b) {
+  const R = 6371;
+  const toRad = value => value * Math.PI / 180;
+  const dLat = toRad(b[0] - a[0]);
+  const dLng = toRad(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a[0])) * Math.cos(toRad(b[0])) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function initStopsMap() {
+  if (stepMap) { stepMap.remove(); stepMap = null; }
+  const el = $('#stops-map');
+  if (!el || !window.L) return;
+  const stops = activeTrip().stops.filter(stop => stop.lat !== '' && stop.lng !== '' && Number.isFinite(Number(stop.lat)) && Number.isFinite(Number(stop.lng)));
+  stepMap = L.map('stops-map', { zoomControl: true }).setView([46.8, 8.2], 5);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(stepMap);
+  const layer = L.layerGroup().addTo(stepMap);
+  const latlngs = [];
+  stops.forEach((stop, index) => {
+    L.marker([Number(stop.lat), Number(stop.lng)]).addTo(layer).bindPopup(`<strong>${index + 1}. ${esc(stop.place)}</strong><br>${stop.nights} nuit${stop.nights > 1 ? 's' : ''}`);
+    latlngs.push([Number(stop.lat), Number(stop.lng)]);
+  });
+  if (latlngs.length > 1) L.polyline(latlngs, { color: '#d16642', weight: 3, opacity: .8, dashArray: '6 8' }).addTo(layer);
+  if (latlngs.length) stepMap.fitBounds(latlngs, { padding: [40, 40], maxZoom: 10 });
+  stepMap.on('click', event => openStopFromMap(event.latlng.lat, event.latlng.lng));
+}
+
+async function openStopFromMap(lat, lng) {
+  let place = '';
+  try {
+    const response = await fetch(`https://photon.komoot.io/reverse?lon=${lng}&lat=${lat}`);
+    if (response.ok) {
+      const data = await response.json();
+      const props = data.features?.[0]?.properties || {};
+      place = [props.name, props.city, props.state].filter(Boolean)[0] || '';
+    }
+  } catch (error) { /* réseau indisponible : saisie manuelle */ }
+  openStopForm(null, { place, lat: Number(lat.toFixed(5)), lng: Number(lng.toFixed(5)) });
 }
 
 function renderStep3(stops) {
@@ -926,28 +1092,12 @@ function renderStep4(stops) {
 }
 
 function applyCreateStep(step) {
+  if (step === 1) { readStep1Form(); return; }
   const form = $('#step-form');
   if (!form) return;
   const trip = activeTrip();
   const data = new FormData(form);
-  if (step === 1) {
-    const start = data.get('startDate') || '';
-    const end = data.get('endDate') || '';
-    if (start) trip.startDate = start;
-    if (end) trip.endDate = end;
-    if (trip.startDate && trip.endDate && trip.endDate >= trip.startDate) syncTripDays(trip);
-    const ages = String(data.get('childrenAges') || '').split(',').map(part => parseInt(part, 10)).filter(n => Number.isFinite(n) && n >= 0).map(age => ({ age }));
-    trip.brief = normalizeBrief({
-      mode: data.get('mode'),
-      adults: data.get('adults'),
-      children: ages,
-      budgetMin: data.get('budgetMin'),
-      budgetMax: data.get('budgetMax'),
-      spirit: data.getAll('spirit')
-    });
-    trip.travelers = Math.max(1, trip.brief.adults + ages.length);
-    if (trip.brief.budgetMax) trip.totalBudget = trip.brief.budgetMax;
-  } else if (step === 3) {
+  if (step === 3) {
     trip.stops.forEach(stop => {
       stop.lodgingType = data.get('lodging_' + stop.id) || stop.lodgingType;
       stop.comfort = data.get('comfort_' + stop.id) || stop.comfort;
@@ -1007,6 +1157,7 @@ function buildBrief(trip) {
       country: trip.country,
       dates: { start: trip.startDate, end: trip.endDate, nights: Math.max(0, dateDiff(trip.startDate, trip.endDate)) },
       mode: trip.brief.mode,
+      transport: trip.brief.transport,
       travelers: { adults: trip.brief.adults, children: trip.brief.children },
       budget: { min: trip.brief.budgetMin, max: trip.brief.budgetMax, currency: trip.currency },
       spirit: trip.brief.spirit
@@ -1096,6 +1247,80 @@ function generateSkeleton(trip) {
   });
   saveState('Squelette « Jour par jour » généré à partir des étapes.');
   navigate('itinerary');
+}
+
+/* ---------- Propositions IA (Phase 2 : import + sélection) ---------- */
+
+function importPropositions(data) {
+  const byStop = data.byStop && typeof data.byStop === 'object' && !Array.isArray(data.byStop) ? data.byStop : null;
+  if (!byStop) return toast('Fichier propositions_v1 invalide.');
+  const trip = state.trips.find(item => item.name === data.tripName) || activeTrip();
+  trip.proposals = normalizeProposals(byStop);
+  state.activeTripId = trip.id;
+  const total = Object.values(trip.proposals).reduce((sum, group) => sum + group.hotels.length + group.restaurants.length + group.activities.length, 0);
+  saveState(`Propositions importées (${total}).`);
+  renderTripSelect();
+  navigate('proposals');
+}
+
+function countSelectedProposals(trip) {
+  return Object.values(trip.proposals || {}).reduce((sum, group) => sum + ['hotels', 'restaurants', 'activities'].reduce((acc, key) => acc + (group[key] || []).filter(item => item.selected).length, 0), 0);
+}
+
+function renderProposalCard(stopId, group, item, trip) {
+  const meta = [item.area, item.cuisine, item.type].filter(Boolean).join(' · ');
+  const price = item.price ? formatMoney(item.price, trip.currency) : '';
+  const rating = item.rating ? `★ ${item.rating}` : '';
+  const url = safeUrl(item.url);
+  return `<article class="card card-pad prop-card ${item.selected ? 'selected' : ''}">
+    <label class="prop-check"><input type="checkbox" data-action="toggle-proposal" data-stop="${esc(stopId)}" data-group="${esc(group)}" data-id="${esc(item.id)}" ${item.selected ? 'checked' : ''}><strong>${esc(item.title)}</strong></label>
+    ${meta ? `<p class="muted">${esc(meta)}</p>` : ''}
+    <div class="prop-meta">${price ? `<span class="badge accent">${price}</span>` : ''}${rating ? `<span class="badge">${esc(rating)}</span>` : ''}</div>
+    ${item.note ? `<p class="prop-note">${esc(item.note)}</p>` : ''}
+    ${url ? `<a class="btn btn-secondary btn-small" href="${esc(url)}" target="_blank" rel="noopener">Ouvrir le lien ↗</a>` : ''}
+  </article>`;
+}
+
+function renderProposals() {
+  const trip = activeTrip();
+  const proposals = trip.proposals || {};
+  const stopIds = Object.keys(proposals);
+  const selected = countSelectedProposals(trip);
+  const groupsMeta = [['hotels', '🏨', 'Hébergements'], ['restaurants', '🍽️', 'Restaurants'], ['activities', '🎯', 'Activités']];
+  const actions = `<button class="btn btn-secondary" data-action="import-data">⇧ Importer des propositions</button>${stopIds.length ? `<button class="btn btn-secondary" data-action="clear-proposals">Vider</button><button class="btn btn-primary" data-action="add-selected-to-resources">+ Ajouter aux Inspirations${selected ? ` (${selected})` : ''}</button>` : ''}`;
+  const body = stopIds.length ? stopIds.map(stopId => {
+    const stop = trip.stops.find(item => item.id === stopId);
+    const label = stop ? stop.place : 'Étape non reconnue';
+    const groups = proposals[stopId];
+    return `<section class="prop-stop"><h2>${esc(label)}</h2>${groupsMeta.map(([key, icon, title]) => {
+      const items = groups[key] || [];
+      if (!items.length) return '';
+      return `<div class="prop-group"><h3>${icon} ${title}</h3><div class="prop-grid">${items.map(item => renderProposalCard(stopId, key, item, trip)).join('')}</div></div>`;
+    }).join('')}</section>`;
+  }).join('') : `<article class="card empty-state"><span class="big">📥</span>Aucune proposition importée. Exportez le brief depuis l'assistant, donnez-le à Claude, puis importez ici le JSON <code>propositions_v1</code> qu'il renvoie.</article>`;
+  $('#main-content').innerHTML = `<div class="page">
+    ${pageHeader('Sélection', 'Propositions de Claude', 'Cochez ce qui vous intéresse, puis ajoutez-le à vos inspirations.', actions)}
+    ${body}
+  </div>`;
+}
+
+function addSelectedProposals() {
+  const trip = activeTrip();
+  const typeMap = { hotels: 'Hébergement', restaurants: 'Restaurant', activities: 'Visite' };
+  let added = 0;
+  Object.entries(trip.proposals || {}).forEach(([stopId, groups]) => {
+    const stop = trip.stops.find(item => item.id === stopId);
+    ['hotels', 'restaurants', 'activities'].forEach(key => {
+      (groups[key] || []).filter(item => item.selected).forEach(item => {
+        trip.resources.push({ id: uid('src'), title: item.title, type: typeMap[key] || 'Autre', url: item.url, notes: [item.note, item.price ? formatMoney(item.price, trip.currency) : ''].filter(Boolean).join(' — '), location: stop ? stop.place : '', lat: '', lng: '', status: 'sélectionné' });
+        item.selected = false;
+        added++;
+      });
+    });
+  });
+  if (!added) return toast('Cochez au moins une proposition.');
+  saveState(`${added} proposition(s) ajoutée(s) aux Inspirations.`);
+  navigate('resources');
 }
 
 function boot() {
