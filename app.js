@@ -58,6 +58,17 @@ const TRANSPORT_CHECKLIST = {
   train: [['Billets de train', 'Documents']],
   bateau: [['Réservation ferry / billets', 'Documents']]
 };
+// Countries whose motorways require a vignette; matched by name against trip/stops when driving.
+const VIGNETTE_COUNTRIES = [
+  ['suisse', 'Suisse'], ['switzerland', 'Suisse'], ['schweiz', 'Suisse'], ['svizzera', 'Suisse'],
+  ['autriche', 'Autriche'], ['austria', 'Autriche'], ['österreich', 'Autriche'], ['osterreich', 'Autriche'],
+  ['slovénie', 'Slovénie'], ['slovenie', 'Slovénie'], ['slovenia', 'Slovénie'],
+  ['tchéquie', 'Tchéquie'], ['tchequie', 'Tchéquie'], ['czech', 'Tchéquie'], ['tchèque', 'Tchéquie'],
+  ['hongrie', 'Hongrie'], ['hungary', 'Hongrie'],
+  ['slovaquie', 'Slovaquie'], ['slovakia', 'Slovaquie'],
+  ['roumanie', 'Roumanie'], ['romania', 'Roumanie'],
+  ['bulgarie', 'Bulgarie'], ['bulgaria', 'Bulgarie']
+];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -508,7 +519,8 @@ function mapPlaces(trip, dayFilter = 'all') {
     id: item.id, type: 'Activité', title: item.title, location: item.location, lat: Number(item.lat), lng: Number(item.lng), dayId: day.id, dayLabel: `Jour ${dayIndex + 1}`, icon: CATEGORIES[item.category]?.[0] || '✨'
   }))).filter(place => dayFilter === 'all' || place.dayId === dayFilter);
   const resources = dayFilter === 'all' ? trip.resources.filter(item => isCoord(item.lat) && isCoord(item.lng)).map(item => ({ id: item.id, type: item.type, title: item.title, location: item.location, lat: Number(item.lat), lng: Number(item.lng), icon: '☆' })) : [];
-  return [...activities, ...resources];
+  const stops = dayFilter === 'all' ? trip.stops.filter(item => isCoord(item.lat) && isCoord(item.lng)).map((item, index) => ({ id: item.id, type: 'Étape', title: `${index + 1}. ${item.place}`, location: `${item.nights} nuit${item.nights > 1 ? 's' : ''}`, lat: Number(item.lat), lng: Number(item.lng), icon: '🚩' })) : [];
+  return [...stops, ...activities, ...resources];
 }
 
 function initMap(places) {
@@ -1381,6 +1393,13 @@ function stopDateMap(trip) {
   return { dates, byStop };
 }
 
+function detectVignetteCountries(trip) {
+  const haystack = [trip.name, trip.country, trip.destination, ...trip.stops.map(stop => stop.place)].join(' ').toLowerCase();
+  const found = new Set();
+  VIGNETTE_COUNTRIES.forEach(([keyword, label]) => { if (haystack.includes(keyword)) found.add(label); });
+  return [...found];
+}
+
 function addChecklistFromSelection(trip, selection) {
   const existing = new Set(trip.checklist.map(item => item.label.trim().toLowerCase()));
   const queued = [];
@@ -1393,6 +1412,10 @@ function addChecklistFromSelection(trip, selection) {
   });
   if (selection.some(entry => entry.group === 'hotels')) push('Confirmer la réservation d’hébergement', 'À réserver');
   (trip.brief.transport || []).forEach(mode => (TRANSPORT_CHECKLIST[mode] || []).forEach(([label, group]) => push(label, group)));
+  if ((trip.brief.transport || []).some(mode => mode === 'voiture_perso' || mode === 'voiture_loc')) {
+    const countries = detectVignetteCountries(trip);
+    push(countries.length ? `Acheter la vignette autoroute (${countries.join(', ')})` : 'Vérifier si une vignette autoroute est nécessaire', 'À faire');
+  }
   push('Documents d’identité (passeport / CNI)', 'Documents');
   if ((trip.brief.children || []).length) push('Trousse à pharmacie enfants', 'Bagages');
   queued.forEach(entry => trip.checklist.push({ id: uid('chk'), label: entry.label, group: entry.group, assignee: 'Famille', done: false }));
