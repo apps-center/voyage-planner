@@ -1211,7 +1211,12 @@ Pour CHAQUE étape (stops[]), propose :
 - 3 hébergements cohérents avec lodging.type / lodging.comfort, le budget et le nombre de voyageurs ;
 - 3 restaurants adaptés à meals et à l'esprit du séjour ;
 - 4 à 6 activités correspondant à wantedActivities, à spirit et aux âges des enfants.
-Pour chaque item, donne un lien : privilégie des URL de RECHERCHE pré-paramétrées (Booking/Airbnb avec la ville, les dates ${brief.trip.dates.start} → ${brief.trip.dates.end} et le nombre de voyageurs) plutôt que des fiches précises, afin d'éviter les liens erronés.
+Nomme des ÉTABLISSEMENTS PRÉCIS et réels quand tu en connais (hôtel, restaurant, prestataire), avec le vrai nom dans "title". Si tu n'es pas sûr d'une adresse exacte, propose une sélection ciblée clairement décrite.
+Lien "url" : de préférence la fiche exacte de l'établissement si tu es sûr qu'elle existe ; sinon une URL de RECHERCHE pré-paramétrée (Booking/Airbnb/Maps avec ville, dates ${brief.trip.dates.start} → ${brief.trip.dates.end} et voyageurs). Ne jamais inventer une URL de fiche douteuse.
+PRIX ("price", en ${brief.trip.budget.currency || 'EUR'}, nombre entier) :
+- hébergements : prix PAR NUIT (l'application le multiplie par le nombre de nuits de l'étape pour le coût total) ;
+- restaurants : coût total indicatif du repas pour tout le groupe ;
+- activités : coût total indicatif pour tout le groupe.
 Réponds UNIQUEMENT avec un objet JSON valide au schéma propositions_v1 ci-dessous, sans aucun texte autour. Les clés de "byStop" doivent correspondre exactement aux stops[].id du brief.
 
 ${schema}
@@ -1292,13 +1297,22 @@ function countSelectedProposals(trip) {
 
 function renderProposalCard(stopId, group, item, trip) {
   const meta = [item.area, item.cuisine, item.type].filter(Boolean).join(' · ');
-  const price = item.price ? formatMoney(item.price, trip.currency) : '';
+  const stop = trip.stops.find(entry => entry.id === stopId);
+  const nights = Math.max(1, stop?.nights || 1);
   const rating = item.rating ? `★ ${item.rating}` : '';
   const url = safeUrl(item.url);
+  let priceBadges = '';
+  if (item.price) {
+    if (group === 'hotels') {
+      priceBadges = `<span class="badge accent">${formatMoney(item.price, trip.currency)}/nuit</span><span class="badge">≈ ${formatMoney(item.price * nights, trip.currency)} · ${nights} nuit${nights > 1 ? 's' : ''}</span>`;
+    } else {
+      priceBadges = `<span class="badge accent">${formatMoney(item.price, trip.currency)}</span>`;
+    }
+  }
   return `<article class="card card-pad prop-card ${item.selected ? 'selected' : ''}">
     <label class="prop-check"><input type="checkbox" data-action="toggle-proposal" data-stop="${esc(stopId)}" data-group="${esc(group)}" data-id="${esc(item.id)}" ${item.selected ? 'checked' : ''}><strong>${esc(item.title)}</strong></label>
     ${meta ? `<p class="muted">${esc(meta)}</p>` : ''}
-    <div class="prop-meta">${price ? `<span class="badge accent">${price}</span>` : ''}${rating ? `<span class="badge">${esc(rating)}</span>` : ''}</div>
+    <div class="prop-meta">${priceBadges}${rating ? `<span class="badge">${esc(rating)}</span>` : ''}</div>
     ${item.note ? `<p class="prop-note">${esc(item.note)}</p>` : ''}
     ${url ? `<a class="btn btn-secondary btn-small" href="${esc(url)}" target="_blank" rel="noopener">Ouvrir le lien ↗</a>` : ''}
   </article>`;
@@ -1406,7 +1420,11 @@ function integrateProposals() {
     const stop = trip.stops.find(entry => entry.id === stopId);
     const dates = byStop[stopId] || [];
     if (group === 'hotels') {
-      trip.reservations.push({ id: uid('res'), type: 'Hébergement', name: item.title, provider: item.area || '', start: dates[0] || trip.startDate, end: dates[dates.length - 1] || trip.endDate, confirmation: '', cost: item.price, url: item.url, notes: item.note });
+      const nights = Math.max(1, stop?.nights || dates.length || 1);
+      const total = asNumber(item.price) * nights;
+      const basis = item.price ? `≈ ${formatMoney(item.price, trip.currency)}/nuit × ${nights} nuit${nights > 1 ? 's' : ''}` : '';
+      trip.reservations.push({ id: uid('res'), type: 'Hébergement', name: item.title, provider: item.area || '', start: dates[0] || trip.startDate, end: dates[dates.length - 1] || trip.endDate, confirmation: '', cost: total, url: item.url, notes: [item.note, basis].filter(Boolean).join(' — ') });
+      if (total) trip.expenses.push({ id: uid('exp'), label: item.title, category: 'Hébergement', planned: total, actual: 0, paid: false, date: dates[0] || '' });
       reservations++;
       return;
     }
@@ -1418,15 +1436,16 @@ function integrateProposals() {
     if (!day.location && stop) day.location = stop.place;
     const category = group === 'restaurants' ? 'repas' : mapProposalCategory(item.type);
     const time = group === 'restaurants' ? '19:30' : times[activities % times.length];
-    day.activities.push({ id: uid('act'), time, endTime: '', title: item.title, category, location: stop ? stop.place : '', lat: '', lng: '', cost: item.price, status: 'sélectionné', bookingUrl: item.url, notes: item.note });
+    day.activities.push({ id: uid('act'), time, endTime: '', title: item.title, category, location: stop ? stop.place : '', lat: '', lng: '', cost: asNumber(item.price), status: 'sélectionné', bookingUrl: item.url, notes: item.note });
     day.activities.sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+    if (asNumber(item.price)) trip.expenses.push({ id: uid('exp'), label: item.title, category: group === 'restaurants' ? 'Restaurants' : 'Activités', planned: asNumber(item.price), actual: 0, paid: false, date: date || '' });
     activities++;
   });
 
   trip.days.sort((a, b) => a.date.localeCompare(b.date));
   const tasks = addChecklistFromSelection(trip, selection);
   selection.forEach(({ item }) => { item.selected = false; });
-  saveState(`Intégré : ${activities} activité(s), ${reservations} réservation(s), ${tasks} tâche(s).`);
+  saveState(`Intégré : ${activities} activité(s), ${reservations} réservation(s), ${tasks} tâche(s) + budget.`);
   navigate('itinerary');
 }
 
