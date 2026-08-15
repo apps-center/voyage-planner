@@ -1,5 +1,5 @@
-const CACHE = 'escapade-v4';
-const RUNTIME = 'escapade-runtime-v4';
+const CACHE = 'escapade-v5';
+const RUNTIME = 'escapade-runtime-v5';
 const RUNTIME_MAX = 150;
 const CORE = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-512.png'];
 
@@ -21,11 +21,27 @@ async function trimCache(name, max) {
 self.addEventListener('fetch', event => {
   const request = event.request;
   if (request.method !== 'GET') return;
-  const isCore = CORE.some(path => request.url.endsWith(path.replace('./', '/')) || request.url.endsWith('/'));
-  event.respondWith(caches.match(request).then(cached => cached || fetch(request).then(response => {
-    const copy = response.clone();
-    const bucket = isCore ? CACHE : RUNTIME;
-    caches.open(bucket).then(cache => cache.put(request, copy).then(() => { if (bucket === RUNTIME) trimCache(RUNTIME, RUNTIME_MAX); }));
-    return response;
-  }).catch(() => request.mode === 'navigate' ? caches.match('./index.html') : Response.error())));
+  const sameOrigin = new URL(request.url).origin === self.location.origin;
+
+  if (sameOrigin) {
+    // App shell: network-first so deploys are visible on the next reload,
+    // falling back to cache when offline.
+    event.respondWith(
+      fetch(request).then(response => {
+        const copy = response.clone();
+        caches.open(CACHE).then(cache => cache.put(request, copy));
+        return response;
+      }).catch(() => caches.match(request).then(cached => cached || (request.mode === 'navigate' ? caches.match('./index.html') : Response.error())))
+    );
+    return;
+  }
+
+  // Cross-origin runtime assets (Leaflet CDN, map tiles): cache-first, bounded.
+  event.respondWith(
+    caches.match(request).then(cached => cached || fetch(request).then(response => {
+      const copy = response.clone();
+      caches.open(RUNTIME).then(cache => cache.put(request, copy).then(() => trimCache(RUNTIME, RUNTIME_MAX)));
+      return response;
+    }).catch(() => Response.error()))
+  );
 });
