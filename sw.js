@@ -1,7 +1,7 @@
 const CACHE = 'escapade-v2';
 const RUNTIME = 'escapade-runtime-v2';
 const RUNTIME_MAX = 150;
-const CORE = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg'];
+const CORE = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-512.png'];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(CORE)).then(() => self.skipWaiting()));
