@@ -1,5 +1,5 @@
-const CACHE = 'escapade-v2';
-const RUNTIME = 'escapade-runtime-v2';
+const CACHE = 'escapade-v3';
+const RUNTIME = 'escapade-runtime-v3';
 const RUNTIME_MAX = 150;
 const CORE = ['./', './index.html', './styles.css', './app.js', './manifest.webmanifest', './icon.svg', './icon-512.png'];
 

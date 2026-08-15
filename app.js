@@ -18,6 +18,19 @@ const CATEGORIES = {
 const EXPENSE_CATEGORIES = ['Transport', 'Hébergement', 'Restaurants', 'Activités', 'Courses', 'Shopping', 'Divers'];
 const RESERVATION_TYPES = ['Vol', 'Train', 'Voiture', 'Hébergement', 'Restaurant', 'Activité', 'Autre'];
 const RESOURCE_TYPES = ['Destination', 'Hébergement', 'Restaurant', 'Randonnée', 'VTT', 'Tennis', 'Golf', 'Visite', 'Transport', 'Autre'];
+const TRIP_MODES = [['itinerant', '🧭', 'Itinérant'], ['sedentaire', '🏝️', 'Sédentaire']];
+const SPIRIT_TAGS = [
+  ['farniente', '😎', 'Farniente'], ['detente', '🧘', 'Détente'], ['aventure', '🧗', 'Aventure'],
+  ['decouverte', '🔎', 'Découverte'], ['culture', '🎭', 'Culture'], ['sportif', '🏅', 'Sportif'],
+  ['nature', '🌿', 'Nature'], ['gastronomie', '🍷', 'Gastronomie'], ['famille', '👨‍👩‍👧', 'Famille']
+];
+const LODGING_TYPES = ['Hôtel', 'Airbnb', 'Gîte', 'Camping', 'Chez l’habitant'];
+const COMFORT_LEVELS = ['Éco', 'Confort', 'Supérieur', 'Luxe'];
+const WANTED_ACTIVITIES = [
+  ['ebike', '🚴', 'E-bike'], ['baignade', '🏊', 'Baignade'], ['golf', '⛳', 'Golf'], ['tennis', '🎾', 'Tennis'],
+  ['rando', '🥾', 'Randonnée'], ['musee', '🏛️', 'Musées'], ['shopping', '🛍️', 'Shopping'],
+  ['poi', '📸', 'Lieux d’intérêt'], ['nature', '🌿', 'Nature'], ['gastronomie', '🍽️', 'Gastronomie'], ['nautique', '⛵', 'Nautique']
+];
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -79,6 +92,14 @@ function sampleState() {
       currency: 'EUR',
       totalBudget: 4500,
       notes: 'Un séjour nature avec randonnées, baignades et une journée de golf.',
+      brief: {
+        mode: 'itinerant', adults: 2, children: [{ age: 8 }, { age: 11 }],
+        budgetMin: 4000, budgetMax: 5000, spirit: ['nature', 'aventure', 'famille']
+      },
+      stops: [
+        { id: uid('stop'), place: 'Ponta Delgada', lat: 37.7412, lng: -25.6756, nights: 3, lodgingType: 'Airbnb', comfort: 'Confort', lunchOut: false, dinnerOut: true, wantedActivities: ['rando', 'baignade', 'poi'] },
+        { id: uid('stop'), place: 'Furnas', lat: 37.7721, lng: -25.3132, nights: 4, lodgingType: 'Hôtel', comfort: 'Supérieur', lunchOut: true, dinnerOut: true, wantedActivities: ['nature', 'gastronomie', 'rando'] }
+      ],
       days: dates.map((date, index) => ({
         id: uid('day'),
         date,
@@ -128,6 +149,41 @@ let mapLayer = null;
 let currentMapDay = 'all';
 let modalSubmitHandler = null;
 let draggedActivity = null;
+let currentStep = 1;
+
+function defaultBrief() {
+  return { mode: 'itinerant', adults: 2, children: [], budgetMin: 0, budgetMax: 0, spirit: [] };
+}
+
+function normalizeBrief(brief) {
+  brief = brief && typeof brief === 'object' ? brief : {};
+  return {
+    mode: brief.mode === 'sedentaire' ? 'sedentaire' : 'itinerant',
+    adults: Number.isFinite(+brief.adults) ? Math.max(0, Math.round(+brief.adults)) : 2,
+    children: Array.isArray(brief.children)
+      ? brief.children.map(child => ({ age: Number.isFinite(+child?.age) ? Math.max(0, Math.round(+child.age)) : 0 }))
+      : [],
+    budgetMin: asNumber(brief.budgetMin),
+    budgetMax: asNumber(brief.budgetMax),
+    spirit: Array.isArray(brief.spirit) ? brief.spirit.filter(tag => typeof tag === 'string') : []
+  };
+}
+
+function normalizeStop(stop) {
+  stop = stop && typeof stop === 'object' ? stop : {};
+  return {
+    id: stop.id || uid('stop'),
+    place: String(stop.place || ''),
+    lat: stop.lat === '' || stop.lat == null ? '' : Number(stop.lat),
+    lng: stop.lng === '' || stop.lng == null ? '' : Number(stop.lng),
+    nights: Number.isFinite(+stop.nights) ? Math.max(0, Math.round(+stop.nights)) : 1,
+    lodgingType: LODGING_TYPES.includes(stop.lodgingType) ? stop.lodgingType : 'Hôtel',
+    comfort: COMFORT_LEVELS.includes(stop.comfort) ? stop.comfort : 'Confort',
+    lunchOut: !!stop.lunchOut,
+    dinnerOut: !!stop.dinnerOut,
+    wantedActivities: Array.isArray(stop.wantedActivities) ? stop.wantedActivities.filter(key => typeof key === 'string') : []
+  };
+}
 
 function normalizeState(data) {
   const fallback = sampleState();
@@ -144,6 +200,8 @@ function normalizeState(data) {
     trip.reservations = Array.isArray(trip.reservations) ? trip.reservations : [];
     trip.checklist = Array.isArray(trip.checklist) ? trip.checklist : [];
     trip.resources = Array.isArray(trip.resources) ? trip.resources : [];
+    trip.brief = normalizeBrief(trip.brief);
+    trip.stops = Array.isArray(trip.stops) ? trip.stops.map(normalizeStop) : [];
   });
   return data;
 }
@@ -239,7 +297,7 @@ function navigate(page) {
 
 function renderPage() {
   ensureActiveTrip();
-  const renderers = { overview: renderOverview, itinerary: renderItinerary, map: renderMapPage, budget: renderBudget, reservations: renderReservations, checklist: renderChecklist, resources: renderResources, settings: renderSettings };
+  const renderers = { overview: renderOverview, create: renderCreate, itinerary: renderItinerary, map: renderMapPage, budget: renderBudget, reservations: renderReservations, checklist: renderChecklist, resources: renderResources, settings: renderSettings };
   (renderers[currentPage] || renderOverview)();
 }
 
@@ -268,6 +326,7 @@ function renderOverview() {
           <span>👨‍👩‍👧‍👦 ${trip.travelers || 1} voyageur${trip.travelers > 1 ? 's' : ''}</span>
           <span>🌙 ${days} jour${days > 1 ? 's' : ''}</span>
         </div>
+        <div class="hero-cta"><button class="btn btn-accent" data-action="go-create">✦ Ouvrir l'assistant de création</button></div>
       </div>
       <div class="hero-side"><div class="countdown"><strong>${daysUntil === null ? '?' : daysUntil < 0 ? '✓' : daysUntil}</strong><span>${daysUntil < 0 ? 'voyage commencé' : 'jours avant le départ'}</span></div></div>
     </section>
@@ -512,8 +571,9 @@ function inputField(name, label, type = 'text', value = '', extra = '') {
 
 function selectField(name, label, options, value = '') {
   return `<div class="field"><label for="field-${name}">${esc(label)}</label><select id="field-${name}" name="${name}">${options.map(option => {
-    const val = typeof option === 'string' ? option : option.value;
-    const text = typeof option === 'string' ? option : option.label;
+    const isObj = option && typeof option === 'object';
+    const val = isObj ? option.value : option;
+    const text = isObj ? option.label : option;
     return `<option value="${esc(val)}" ${String(val) === String(value) ? 'selected' : ''}>${esc(text)}</option>`;
   }).join('')}</select></div>`;
 }
@@ -542,13 +602,14 @@ function openTripForm(trip = null) {
         Object.assign(trip, data, { travelers: Number(data.travelers), totalBudget: asNumber(data.totalBudget) });
         droppedDays = syncTripDays(trip);
       } else {
-        const newTrip = { id: uid('trip'), ...data, travelers:Number(data.travelers), totalBudget:asNumber(data.totalBudget), days:[], expenses:[], reservations:[], checklist:[], resources:[] };
+        const newTrip = { id: uid('trip'), ...data, travelers:Number(data.travelers), totalBudget:asNumber(data.totalBudget), days:[], expenses:[], reservations:[], checklist:[], resources:[], stops:[], brief: normalizeBrief({ adults: Number(data.travelers), budgetMax: asNumber(data.totalBudget) }) };
         syncTripDays(newTrip);
         state.trips.push(newTrip);
         state.activeTripId = newTrip.id;
       }
       saveState(isEdit ? (droppedDays ? `Voyage mis à jour. ${droppedDays} journée(s) hors dates retirée(s).` : 'Voyage mis à jour.') : 'Nouveau voyage créé.');
-      closeModal(); renderTripSelect(); renderPage();
+      closeModal(); renderTripSelect();
+      if (isEdit) { renderPage(); } else { currentStep = 1; navigate('create'); }
     }
   });
 }
@@ -621,7 +682,8 @@ function openResourceForm(resource = null, defaults = {}) {
   }});
 }
 
-function openGeocodeSearch() {
+function openGeocodeSearch(onPick) {
+  const pick = typeof onPick === 'function' ? onPick : (result => { closeModal(); openResourceForm(null, result); });
   openModal({ eyebrow:'Carte', title:'Rechercher un lieu', submitLabel:'Rechercher', body:`<div class="form-grid"><div class="field full"><label for="field-query">Nom du lieu</label><input id="field-query" name="query" placeholder="Ex. golf de Batalha, Açores" required><span class="hint">Recherche via Photon et OpenStreetMap, sans clé API.</span></div><div class="full" id="geocode-results"></div></div>`, onSubmit: async form => {
     const query = formDataObject(form).query;
     const resultsNode = $('#geocode-results');
@@ -638,7 +700,7 @@ function openGeocodeSearch() {
       }).join('') : '<p class="muted">Aucun résultat. Précisez le pays ou la région.</p>';
       $$('[data-geocode-index]', resultsNode).forEach(button => button.addEventListener('click', () => {
         const result={title:button.dataset.title,location:button.dataset.location,lat:Number(button.dataset.lat),lng:Number(button.dataset.lng)};
-        closeModal();openResourceForm(null,result);
+        pick(result);
       }));
     } catch(error) { resultsNode.innerHTML=`<p class="muted">${esc(error.message)}. Vous pouvez saisir les coordonnées manuellement.</p>`; }
     finally { $('#modal-submit').disabled=false; }
@@ -719,6 +781,20 @@ function handleAction(action,node) {
     case 'edit-trip': openTripForm(trip);break;
     case 'duplicate-trip': {const copyTrip=clone(trip);copyTrip.id=uid('trip');copyTrip.name=`${trip.name} - copie`;state.trips.push(copyTrip);state.activeTripId=copyTrip.id;saveState('Voyage dupliqué.');renderTripSelect();renderPage();break;}
     case 'delete-trip': if(state.trips.length===1){toast('Conservez au moins un voyage.');break;} if(confirm(`Supprimer « ${trip.name} » ?`)){deleteById(state.trips,trip.id);state.activeTripId=state.trips[0].id;saveState('Voyage supprimé.');renderTripSelect();renderPage();}break;
+    case 'go-create': currentStep=1; navigate('create'); break;
+    case 'create-next': applyCreateStep(currentStep); currentStep=Math.min(4,currentStep+1); renderPage(); break;
+    case 'create-prev': applyCreateStep(currentStep); currentStep=Math.max(1,currentStep-1); renderPage(); break;
+    case 'create-step': applyCreateStep(currentStep); currentStep=clamp(Number(node.dataset.step)||1,1,4); renderPage(); break;
+    case 'add-stop': openStopForm(); break;
+    case 'edit-stop': openStopForm(trip.stops.find(item=>item.id===node.dataset.id)); break;
+    case 'delete-stop': if(confirm('Supprimer cette étape ?')){deleteById(trip.stops,node.dataset.id);saveState('Étape supprimée.');renderPage();}break;
+    case 'move-stop-up': moveStop(node.dataset.id,-1); break;
+    case 'move-stop-down': moveStop(node.dataset.id,1); break;
+    case 'stop-geocode': { const form=$('#modal-form'); const data=form?formDataObject(form):{}; const editing=data.stopId?trip.stops.find(s=>s.id===data.stopId):null; openGeocodeSearch(result=>openStopForm(editing,{ place:result.title||data.place||result.location, nights:Math.max(0,Math.round(asNumber(data.nights)))||2, lat:result.lat, lng:result.lng })); break; }
+    case 'export-brief': applyCreateStep(currentStep); exportBrief(); break;
+    case 'show-prompt': applyCreateStep(currentStep); showBriefPrompt(); break;
+    case 'copy-prompt': { const ta=$('#brief-prompt-text'); if(ta){ta.select();navigator.clipboard?.writeText(ta.value).then(()=>toast('Prompt copié.'),()=>toast('Sélectionnez puis copiez.'));} break; }
+    case 'generate-skeleton': applyCreateStep(currentStep); generateSkeleton(trip); break;
     case 'add-destination-pref': addPreference('destination','#new-destination-pref');break;
     case 'add-activity-pref': addPreference('activity','#new-activity-pref');break;
     case 'add-traveler-pref': addPreference('traveler','#new-traveler-pref');break;
@@ -747,6 +823,7 @@ function bindGlobalEvents() {
   $('#modal-close').addEventListener('click',closeModal);$('#modal-cancel').addEventListener('click',closeModal);
   $('#modal-backdrop').addEventListener('click',event=>{if(event.target===event.currentTarget)closeModal();});
   $('#modal-form').addEventListener('submit',event=>{event.preventDefault();if(modalSubmitHandler)modalSubmitHandler(event.currentTarget);});
+  document.addEventListener('submit',event=>{if(event.target.id==='step-form')event.preventDefault();});
   document.addEventListener('keydown',event=>{
     if($('#modal-backdrop').classList.contains('hidden'))return;
     if(event.key==='Escape'){closeModal();return;}
@@ -758,6 +835,267 @@ function bindGlobalEvents() {
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
     }
   });
+}
+
+/* ---------- Assistant de création (Phase 1) ---------- */
+
+function renderCreate() {
+  const trip = activeTrip();
+  const brief = trip.brief;
+  const stops = trip.stops;
+  const steps = ['Préférences', 'Étapes & carte', 'Confort & repas', 'Activités'];
+  const stepper = `<div class="stepper">${steps.map((label, index) => {
+    const n = index + 1;
+    const cls = n === currentStep ? 'active' : (n < currentStep ? 'done' : '');
+    return `<button type="button" class="step ${cls}" data-action="create-step" data-step="${n}"><span class="step-num">${n < currentStep ? '✓' : n}</span><span class="step-label">${esc(label)}</span></button>`;
+  }).join('')}</div>`;
+  const nightsSum = stops.reduce((sum, stop) => sum + Math.max(0, stop.nights), 0);
+  const duration = tripDuration(trip);
+  const bodies = { 1: renderStep1(trip, brief), 2: renderStep2(trip, stops, nightsSum, duration), 3: renderStep3(stops), 4: renderStep4(stops) };
+  const footer = `<footer class="create-footer">
+    ${currentStep > 1 ? `<button class="btn btn-secondary" data-action="create-prev">← Précédent</button>` : '<span></span>'}
+    ${currentStep < 4
+      ? `<button class="btn btn-primary" data-action="create-next">Suivant →</button>`
+      : `<button class="btn btn-primary" data-action="export-brief">⇩ Exporter le brief pour Claude</button>`}
+  </footer>`;
+  $('#main-content').innerHTML = `<div class="page">
+    ${pageHeader('Assistant', 'Créer le voyage', 'Renseignez les 4 étapes, puis exportez le brief pour Claude.', `<button class="btn btn-secondary" data-action="show-prompt">⌕ Voir le prompt</button><button class="btn btn-secondary" data-action="generate-skeleton">☷ Générer le planning</button>`)}
+    ${stepper}
+    <section class="card card-pad create-body">${bodies[currentStep] || ''}</section>
+    ${footer}
+  </div>`;
+}
+
+function renderStep1(trip, brief) {
+  const modeButtons = TRIP_MODES.map(([val, icon, label]) => `<label class="pick ${brief.mode === val ? 'active' : ''}"><input type="radio" name="mode" value="${val}" ${brief.mode === val ? 'checked' : ''}><span>${icon} ${label}</span></label>`).join('');
+  const spiritChips = SPIRIT_TAGS.map(([val, icon, label]) => `<label class="chip-check ${brief.spirit.includes(val) ? 'active' : ''}"><input type="checkbox" name="spirit" value="${val}" ${brief.spirit.includes(val) ? 'checked' : ''}><span>${icon} ${esc(label)}</span></label>`).join('');
+  const ages = brief.children.map(child => child.age).join(', ');
+  return `<form id="step-form">
+    <div class="form-grid">
+      ${inputField('startDate', 'Date de départ', 'date', trip.startDate, 'required')}
+      ${inputField('endDate', 'Date de retour', 'date', trip.endDate, 'required')}
+      ${selectField('adults', 'Adultes', [1, 2, 3, 4, 5, 6, 7, 8], brief.adults)}
+      ${inputField('childrenAges', 'Âges des enfants', 'text', ages, 'placeholder="ex. 8, 11" class="full"')}
+      ${inputField('budgetMin', 'Budget min', 'number', brief.budgetMin, 'min="0" step="50"')}
+      ${inputField('budgetMax', 'Budget max', 'number', brief.budgetMax, 'min="0" step="50"')}
+    </div>
+    <div class="field full"><label>Mode de séjour</label><div class="mode-pick">${modeButtons}</div></div>
+    <div class="field full"><label>Esprit / ambiance recherchée</label><div class="chip-checks">${spiritChips}</div></div>
+  </form>`;
+}
+
+function renderStep2(trip, stops, nightsSum, duration) {
+  const list = stops.length ? stops.map((stop, index) => `<article class="card stop-card">
+    <div class="stop-order">${index + 1}</div>
+    <div class="stop-main"><strong>${esc(stop.place || 'Étape sans nom')}</strong><small>${stop.nights} nuit${stop.nights > 1 ? 's' : ''}${stop.lat !== '' && stop.lng !== '' ? ' · 📍 géolocalisée' : ''}</small></div>
+    <div class="stop-actions">
+      <button class="icon-btn" data-action="move-stop-up" data-id="${stop.id}" title="Monter">↑</button>
+      <button class="icon-btn" data-action="move-stop-down" data-id="${stop.id}" title="Descendre">↓</button>
+      <button class="icon-btn" data-action="edit-stop" data-id="${stop.id}" title="Modifier">✎</button>
+      <button class="icon-btn" data-action="delete-stop" data-id="${stop.id}" title="Supprimer">×</button>
+    </div>
+  </article>`).join('') : `<div class="empty-state"><span class="big">🗺️</span>Ajoutez les villes ou régions où vous séjournez.</div>`;
+  return `<div class="stack">
+    <div class="create-head"><p class="muted">Ajoutez chaque ville/région et le nombre de nuits sur place.${trip.brief.mode === 'sedentaire' ? ' Mode sédentaire : une base unique suffit généralement.' : ''}</p><button class="btn btn-primary btn-small" data-action="add-stop">+ Ajouter une étape</button></div>
+    <div class="nights-note">∑ nuits saisies : <strong>${nightsSum}</strong> · durée du voyage : <strong>${duration} jour${duration > 1 ? 's' : ''}</strong></div>
+    <div class="stops-list">${list}</div>
+  </div>`;
+}
+
+function renderStep3(stops) {
+  if (!stops.length) return `<div class="empty-state"><span class="big">🏨</span>Ajoutez d’abord des étapes à l’étape précédente.</div>`;
+  return `<form id="step-form"><div class="stack">${stops.map(stop => `<article class="card card-pad sub-card">
+    <h3>${esc(stop.place || 'Étape')}</h3>
+    <div class="form-grid">
+      ${selectField('lodging_' + stop.id, 'Hébergement', LODGING_TYPES, stop.lodgingType)}
+      ${selectField('comfort_' + stop.id, 'Niveau de confort', COMFORT_LEVELS, stop.comfort)}
+    </div>
+    <div class="chip-checks">
+      <label class="chip-check ${stop.lunchOut ? 'active' : ''}"><input type="checkbox" name="lunch_${stop.id}" value="yes" ${stop.lunchOut ? 'checked' : ''}><span>🥐 Déjeuner au resto</span></label>
+      <label class="chip-check ${stop.dinnerOut ? 'active' : ''}"><input type="checkbox" name="dinner_${stop.id}" value="yes" ${stop.dinnerOut ? 'checked' : ''}><span>🍽️ Dîner au resto</span></label>
+    </div>
+  </article>`).join('')}</div></form>`;
+}
+
+function renderStep4(stops) {
+  if (!stops.length) return `<div class="empty-state"><span class="big">🎯</span>Ajoutez d’abord des étapes à l’étape 2.</div>`;
+  return `<form id="step-form"><div class="stack">${stops.map(stop => `<article class="card card-pad sub-card">
+    <h3>${esc(stop.place || 'Étape')}</h3>
+    <div class="chip-checks">${WANTED_ACTIVITIES.map(([key, icon, label]) => `<label class="chip-check ${stop.wantedActivities.includes(key) ? 'active' : ''}"><input type="checkbox" name="act_${stop.id}" value="${key}" ${stop.wantedActivities.includes(key) ? 'checked' : ''}><span>${icon} ${esc(label)}</span></label>`).join('')}</div>
+  </article>`).join('')}</div></form>`;
+}
+
+function applyCreateStep(step) {
+  const form = $('#step-form');
+  if (!form) return;
+  const trip = activeTrip();
+  const data = new FormData(form);
+  if (step === 1) {
+    const start = data.get('startDate') || '';
+    const end = data.get('endDate') || '';
+    if (start) trip.startDate = start;
+    if (end) trip.endDate = end;
+    if (trip.startDate && trip.endDate && trip.endDate >= trip.startDate) syncTripDays(trip);
+    const ages = String(data.get('childrenAges') || '').split(',').map(part => parseInt(part, 10)).filter(n => Number.isFinite(n) && n >= 0).map(age => ({ age }));
+    trip.brief = normalizeBrief({
+      mode: data.get('mode'),
+      adults: data.get('adults'),
+      children: ages,
+      budgetMin: data.get('budgetMin'),
+      budgetMax: data.get('budgetMax'),
+      spirit: data.getAll('spirit')
+    });
+    trip.travelers = Math.max(1, trip.brief.adults + ages.length);
+    if (trip.brief.budgetMax) trip.totalBudget = trip.brief.budgetMax;
+  } else if (step === 3) {
+    trip.stops.forEach(stop => {
+      stop.lodgingType = data.get('lodging_' + stop.id) || stop.lodgingType;
+      stop.comfort = data.get('comfort_' + stop.id) || stop.comfort;
+      stop.lunchOut = data.get('lunch_' + stop.id) === 'yes';
+      stop.dinnerOut = data.get('dinner_' + stop.id) === 'yes';
+    });
+  } else if (step === 4) {
+    trip.stops.forEach(stop => { stop.wantedActivities = data.getAll('act_' + stop.id); });
+  }
+  saveState();
+}
+
+function moveStop(id, direction) {
+  const stops = activeTrip().stops;
+  const index = stops.findIndex(stop => stop.id === id);
+  const target = index + direction;
+  if (index < 0 || target < 0 || target >= stops.length) return;
+  [stops[index], stops[target]] = [stops[target], stops[index]];
+  saveState();
+  renderPage();
+}
+
+function openStopForm(stop = null, defaults = {}) {
+  const trip = activeTrip();
+  const current = { place: '', nights: 2, lat: '', lng: '', ...(stop || {}), ...defaults };
+  openModal({
+    eyebrow: 'Étape',
+    title: stop ? 'Modifier l’étape' : 'Ajouter une étape',
+    body: `<div class="form-grid">
+      <input type="hidden" name="stopId" value="${stop ? esc(stop.id) : ''}">
+      ${inputField('place', 'Ville ou région', 'text', current.place, 'list="favorite-destinations" required class="full"')}
+      <datalist id="favorite-destinations">${state.preferences.destinations.map(item => `<option value="${esc(item)}">`).join('')}</datalist>
+      ${inputField('nights', 'Nombre de nuits', 'number', current.nights, 'min="0" step="1"')}
+      ${inputField('lat', 'Latitude', 'number', current.lat, 'step="any"')}
+      ${inputField('lng', 'Longitude', 'number', current.lng, 'step="any"')}
+      <div class="field full"><button type="button" class="btn btn-secondary btn-small" data-action="stop-geocode">⌕ Rechercher les coordonnées</button><span class="hint">Renseigne automatiquement la position via Photon/OpenStreetMap.</span></div>
+    </div>`,
+    onSubmit: form => {
+      const data = formDataObject(form);
+      const payload = { place: data.place, nights: Math.max(0, Math.round(asNumber(data.nights))), lat: data.lat === '' ? '' : Number(data.lat), lng: data.lng === '' ? '' : Number(data.lng) };
+      if (stop) Object.assign(stop, payload);
+      else trip.stops.push(normalizeStop(payload));
+      saveState('Étape enregistrée.');
+      closeModal();
+      renderPage();
+    }
+  });
+}
+
+function buildBrief(trip) {
+  return {
+    schema: 'brief_v1',
+    generatedAt: todayIso(),
+    trip: {
+      name: trip.name,
+      destination: trip.destination,
+      country: trip.country,
+      dates: { start: trip.startDate, end: trip.endDate, nights: Math.max(0, dateDiff(trip.startDate, trip.endDate)) },
+      mode: trip.brief.mode,
+      travelers: { adults: trip.brief.adults, children: trip.brief.children },
+      budget: { min: trip.brief.budgetMin, max: trip.brief.budgetMax, currency: trip.currency },
+      spirit: trip.brief.spirit
+    },
+    stops: trip.stops.map((stop, index) => ({
+      id: stop.id, order: index + 1, place: stop.place, lat: stop.lat, lng: stop.lng, nights: stop.nights,
+      lodging: { type: stop.lodgingType, comfort: stop.comfort },
+      meals: { lunchOut: stop.lunchOut, dinnerOut: stop.dinnerOut },
+      wantedActivities: stop.wantedActivities
+    }))
+  };
+}
+
+function buildBriefPrompt(brief) {
+  const schema = `{
+  "schema": "propositions_v1",
+  "tripName": "${brief.trip.name}",
+  "byStop": {
+    "<stopId>": {
+      "hotels":      [{"id":"","title":"","url":"","price":0,"rating":0,"area":"","note":""}],
+      "restaurants": [{"id":"","title":"","url":"","cuisine":"","price":0,"note":""}],
+      "activities":  [{"id":"","title":"","url":"","type":"","duration":"","price":0,"note":""}]
+    }
+  }
+}`;
+  return `Tu es un assistant de voyage. Voici un brief de voyage familial au format JSON (schema brief_v1).
+Pour CHAQUE étape (stops[]), propose :
+- 3 hébergements cohérents avec lodging.type / lodging.comfort, le budget et le nombre de voyageurs ;
+- 3 restaurants adaptés à meals et à l'esprit du séjour ;
+- 4 à 6 activités correspondant à wantedActivities, à spirit et aux âges des enfants.
+Pour chaque item, donne un lien : privilégie des URL de RECHERCHE pré-paramétrées (Booking/Airbnb avec la ville, les dates ${brief.trip.dates.start} → ${brief.trip.dates.end} et le nombre de voyageurs) plutôt que des fiches précises, afin d'éviter les liens erronés.
+Réponds UNIQUEMENT avec un objet JSON valide au schéma propositions_v1 ci-dessous, sans aucun texte autour. Les clés de "byStop" doivent correspondre exactement aux stops[].id du brief.
+
+${schema}
+
+Voici le brief :
+
+${JSON.stringify(brief, null, 2)}`;
+}
+
+function exportBrief() {
+  const trip = activeTrip();
+  if (!trip.stops.length) return toast('Ajoutez au moins une étape avant d’exporter.');
+  const brief = buildBrief(trip);
+  const blob = new Blob([JSON.stringify(brief, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `escapade-brief-${todayIso()}.json`;
+  link.click();
+  URL.revokeObjectURL(url);
+  const prompt = buildBriefPrompt(brief);
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(prompt).then(() => toast('Brief téléchargé + prompt copié.'), () => toast('Brief téléchargé. Utilisez « Voir le prompt » pour le copier.'));
+  } else {
+    toast('Brief téléchargé. Utilisez « Voir le prompt » pour le copier.');
+  }
+}
+
+function showBriefPrompt() {
+  const trip = activeTrip();
+  if (!trip.stops.length) return toast('Ajoutez au moins une étape.');
+  const prompt = buildBriefPrompt(buildBrief(trip));
+  openModal({
+    eyebrow: 'Assistant',
+    title: 'Prompt pour Claude / Cowork',
+    submitLabel: 'Fermer',
+    body: `<div class="field full"><p class="hint">Copiez ce texte et collez-le dans Claude ou Cowork (le brief est déjà inclus). La réponse JSON pourra être réimportée dans le dashboard en Phase 2.</p><textarea id="brief-prompt-text" rows="14" readonly>${esc(prompt)}</textarea><div style="margin-top:10px"><button type="button" class="btn btn-secondary" data-action="copy-prompt">⧉ Copier le prompt</button></div></div>`,
+    onSubmit: () => closeModal()
+  });
+}
+
+function generateSkeleton(trip) {
+  const dates = enumerateDates(trip.startDate, trip.endDate);
+  if (!dates.length) return toast('Définissez d’abord les dates du voyage (étape 1).');
+  const byDate = new Map(trip.days.map(day => [day.date, day]));
+  const sequence = [];
+  trip.stops.forEach(stop => { for (let i = 0; i < Math.max(1, stop.nights); i++) sequence.push(stop); });
+  trip.days = dates.map((date, index) => {
+    const stop = sequence[index] || sequence[sequence.length - 1] || null;
+    const existing = byDate.get(date);
+    if (existing) {
+      if (!existing.location && stop) existing.location = stop.place;
+      return existing;
+    }
+    return { id: uid('day'), date, title: stop ? stop.place : `Journée ${index + 1}`, location: stop ? stop.place : '', activities: [] };
+  });
+  saveState('Squelette « Jour par jour » généré à partir des étapes.');
+  navigate('itinerary');
 }
 
 function boot() {
